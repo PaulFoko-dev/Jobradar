@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JobRadar</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="/static/img/favicon.png">
+  <link rel="stylesheet" href="/static/style.css">
+  <script>
+    try { const t = localStorage.getItem("jr-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+  </script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo"><img src="/static/img/logo-96.png" alt="JobRadar"></div>
+      <div><strong>JobRadar</strong><small>Veille d'offres IA</small></div>
+      <button class="theme-btn" id="themeBtn" title="Changer de thème" aria-label="Changer de thème">
+        <svg class="moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+    </div>
+    <button class="btn primary block" id="newSearchBtn">+ Nouvelle recherche</button>
+    <button class="search-item nav-tracker" id="trackerNav">
+      <span><svg viewBox="0 0 24 24" class="ic stroke"><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg> Mes candidatures</span>
+      <span class="count" id="trackerCount">0</span>
+    </button>
+    <div class="side-title">Mes recherches</div>
+    <nav id="searchList" class="search-list"></nav>
+    <div class="side-foot">Analyse par <span class="ai-label">l'IA</span><br>Collecte depuis ce PC</div>
+  </aside>
+
+  <main class="main">
+    <!-- ========== Vue : nouvelle recherche / édition ========== -->
+    <section id="viewEditor" class="view" hidden>
+      <header class="page-head">
+        <div>
+          <h1 id="editorTitle">Nouvelle recherche</h1>
+          <p class="muted">Remplis le formulaire, décris ta recherche en langage naturel, ou les deux. <span class="ai-label">L'IA</span> en déduit les mots-clés et les critères.</p>
+        </div>
+      </header>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Formulaire</h2>
+          <label class="field"><span>Domaine</span>
+            <input id="fDomain" list="domains" placeholder="ex. Cybersécurité">
+            <datalist id="domains">
+              <option>Cybersécurité</option><option>Data / IA</option><option>Développement logiciel</option>
+              <option>Cloud / DevOps</option><option>Réseaux et télécoms</option><option>Systèmes embarqués</option>
+              <option>Finance</option><option>Marketing</option>
+            </datalist>
+          </label>
+          <div class="field"><span>Types de contrat</span>
+            <div class="chips-select" id="fContracts">
+              <button data-v="stage">Stage</button><button data-v="alternance">Alternance</button>
+              <button data-v="cdi">CDI</button><button data-v="cdd">CDD</button>
+              <button data-v="professionnalisation">Professionnalisation</button>
+              <button data-v="freelance">Freelance</button><button data-v="vie">VIE</button>
+            </div>
+          </div>
+          <label class="field"><span>Localisation(s)</span>
+            <input id="fLocation" placeholder="ex. Île-de-France, Limoges">
+          </label>
+          <div class="row-3">
+            <label class="field"><span>Niveau</span>
+              <select id="fLevel"><option value="">Indifférent</option><option>Bac+2</option><option>Bac+3</option><option>Bac+4</option><option selected>Bac+5</option></select>
+            </label>
+            <label class="field"><span>Durée</span><input id="fDuration" placeholder="ex. 6 mois"></label>
+            <label class="field"><span>Début</span><input id="fStart" type="month"></label>
+          </div>
+          <label class="field"><span>Intitulés ou mots-clés</span>
+            <textarea id="fKeywords" rows="2" placeholder="ex. pentest, SOC, analyste sécurité, GRC"></textarea>
+          </label>
+          <div class="row-2">
+            <label class="field"><span>Publiées depuis</span>
+              <select id="fDays"><option value="7">7 jours</option><option value="15">15 jours</option><option value="30" selected>30 jours</option><option value="60">60 jours</option></select>
+            </label>
+            <div class="field"><span>Mise à jour</span>
+              <div class="segmented" id="fFrequency">
+                <button data-v="daily" class="on">Quotidienne</button><button data-v="manual">À la demande</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Ou décris ta recherche</h2>
+          <textarea id="fPrompt" class="prompt" rows="9" placeholder="ex. Je cherche un stage de fin d'études (bac+5) de 6 mois en cybersécurité à partir de janvier, en Île-de-France ou autour de Limoges. Plutôt pentest, SOC ou audit. Pas d'offres qui demandent de l'expérience."></textarea>
+          <button class="btn primary block lg" id="analyzeBtn">
+            <svg viewBox="0 0 24 24" class="ic"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/></svg>
+            Analyser avec <span class="ai-label">l'IA</span>
+          </button>
+          <p class="muted small"><span class="ai-label">L'assistant IA</span> est appelé sur ce PC, avec ton abonnement (sans clé API). Compte 20 secondes à 1 minute.</p>
+        </div>
+      </div>
+
+      <div id="criteriaPanel" class="panel criteria" hidden>
+        <div class="crit-head">
+          <div>
+            <h2>Critères proposés par <span class="ai-label">l'IA</span></h2>
+            <p id="cSummary" class="muted"></p>
+          </div>
+          <label class="field name-field"><span>Nom de la recherche</span><input id="cName"></label>
+        </div>
+        <div id="cConflicts" class="alert" hidden></div>
+
+        <div class="crit-grid">
+          <div class="crit-block wide"><h3>Requêtes envoyées aux sites <small>(ce que les robots tapent dans la barre de recherche)</small></h3><div class="tags editable" data-key="search_queries"></div></div>
+          <div class="crit-block"><h3>Intitulés ciblés</h3><div class="tags editable" data-key="titles"></div></div>
+          <div class="crit-block"><h3>Mots-clés pertinents</h3><div class="tags editable" data-key="include_keywords"></div></div>
+          <div class="crit-block"><h3>Mots-clés exclus</h3><div class="tags editable neg" data-key="exclude_keywords"></div></div>
+          <div class="crit-block"><h3>Compétences attendues</h3><div class="tags editable" data-key="skills"></div></div>
+          <div class="crit-block"><h3>Zones géographiques</h3><div id="cLocations" class="loc-list"></div></div>
+          <div class="crit-block"><h3>Contrat et période</h3>
+            <div class="kv" id="cMeta"></div>
+          </div>
+        </div>
+        <div class="crit-actions">
+          <button class="btn ghost" id="reanalyzeBtn">Ré-analyser</button>
+          <button class="btn primary lg" id="saveRunBtn">Enregistrer et lancer la recherche →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== Vue : résultats ========== -->
+    <section id="viewResults" class="view" hidden>
+      <header class="page-head">
+        <div>
+          <h1 id="rTitle"></h1>
+          <p id="rSummary" class="muted"></p>
+          <p id="rMeta" class="muted small"></p>
+        </div>
+        <div class="head-actions">
+          <button class="btn ghost" id="editBtn">Modifier les critères</button>
+          <button class="btn primary" id="runBtn">↻ Actualiser maintenant</button>
+        </div>
+      </header>
+
+      <div id="progress" class="progress-card" hidden>
+        <div class="progress-top"><span id="progressMsg"></span><button class="link" id="logToggle">journal</button></div>
+        <div class="bar"><div id="progressBar"></div></div>
+        <pre id="progressLog" hidden></pre>
+      </div>
+
+      <div class="filters">
+        <input id="qText" type="search" placeholder="Filtrer (intitulé, entreprise, ville…)">
+        <div class="filter-group">
+          <span>Zone</span>
+          <div class="segmented sm" id="qZone"><button data-v="strict">Stricte</button><button data-v="flex">Souple</button></div>
+          <label class="inline" id="qZoneThrWrap" title="En mode souple, les offres hors zone ne s'affichent qu'au-dessus de ce score">
+            hors zone si ≥ <input id="qZoneThr" type="number" min="0" max="100" step="5">
+          </label>
+        </div>
+        <div class="filter-group">
+          <span>Score ≥ <b id="qMinVal"></b></span>
+          <input id="qMin" type="range" min="0" max="100" step="5">
+        </div>
+        <select id="qStatus">
+          <option value="active">À traiter</option><option value="fav">Favoris</option>
+          <option value="applied">Dans le suivi</option><option value="ignored">Masquées</option><option value="all">Toutes</option>
+        </select>
+        <select id="qSource"><option value="">Toutes les sources</option></select>
+        <select id="qSort"><option value="score">Pertinence</option><option value="date">Plus récentes</option></select>
+      </div>
+      <div id="stats" class="stats"></div>
+      <div id="cards" class="cards"></div>
+      <div id="empty" class="empty" hidden></div>
+    </section>
+
+    <!-- ========== Vue : suivi des candidatures ========== -->
+    <section id="viewTracker" class="view" hidden>
+      <header class="page-head">
+        <div>
+          <h1>Suivi des candidatures</h1>
+          <p class="muted">Chaque offre ouverte via « Voir l'offre et candidater » arrive ici. Glisse les cartes d'une colonne à l'autre pour mettre à jour leur statut.</p>
+        </div>
+        <div class="head-actions">
+          <div class="segmented" id="tView"><button data-v="kanban" class="on">Kanban</button><button data-v="list">Liste</button></div>
+          <button class="btn primary" id="addAppBtn">+ Ajouter</button>
+        </div>
+      </header>
+      <div id="tStats" class="funnel"></div>
+      <div id="tKanban" class="kanban"></div>
+      <div id="tList" class="panel table-wrap" hidden></div>
+      <div id="tEmpty" class="empty" hidden>Aucune candidature suivie pour l'instant. Ouvre une offre et clique sur « Voir l'offre et candidater ».</div>
+    </section>
+
+    <section id="viewWelcome" class="view">
+      <div class="welcome">
+        <div class="logo big"><img src="/static/img/logo-256.png" alt=""></div>
+        <h1>Bienvenue sur JobRadar</h1>
+        <p class="muted">Décris ce que tu cherches, l'IA en tire les mots-clés, les robots parcourent les sites depuis ton PC, et tu reçois des offres triées par pertinence.</p>
+        <button class="btn primary lg" onclick="openEditor()">Créer ma première recherche</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ========== Modal détail d'une offre ========== -->
+<div id="modal" class="modal" hidden>
+  <div class="modal-backdrop" data-close></div>
+  <article class="modal-card" role="dialog" aria-modal="true">
+    <button class="modal-close" data-close aria-label="Fermer">×</button>
+    <div id="modalBody"></div>
+  </article>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<div id="confirm" class="confirm" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

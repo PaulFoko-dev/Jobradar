@@ -1,0 +1,7 @@
+# Environnement Python
+.venv/
+__pycache__/
+*.pyc
+
+# Données personnelles : base d'offres, candidatures, configuration (identifiants éventuels)
+data/
