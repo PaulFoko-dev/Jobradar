@@ -1,0 +1,44 @@
+{
+  "kind": "cv",
+  "language": "fr",
+  "base_source_id": "src-1",
+  "template": {"kind": "jobradar", "id": "sobre-ats"},
+  "headline": "Stagiaire Analyste SOC",
+  "summary": "Étudiant en Master 2 cybersécurité, à la recherche d'un stage de six mois en détection et réponse aux incidents (SOC) à partir de mars 2027.",
+  "sections": [
+    {"type": "experience", "title": "Expérience professionnelle", "items": [
+      {"ref": "exp-1", "fields": {"title": "Analyste SOC (alternance)", "organization": "Acme Sécurité", "location": "Paris", "start": "2024-09", "end": null},
+       "bullets": [
+         {"ref": "exp-1-b1", "text": "Qualification de 40 alertes par jour dans Splunk Enterprise Security et escalade des incidents avérés."},
+         {"ref": "exp-1-b2", "text": "Rédaction de 12 procédures de réponse aux incidents (hameçonnage, compromission de compte)."},
+         {"ref": "exp-1-b3", "text": "Développement de scripts Python d'enrichissement des alertes (réputation d'IP, géolocalisation)."}
+       ]},
+      {"ref": "exp-2", "fields": {"title": "Technicien support informatique (stage)", "organization": "Mairie de Créteil", "location": "Créteil", "start": "2023-06", "end": "2023-08"},
+       "bullets": [
+         {"ref": "exp-2-b1", "text": "Support de niveau 1 pour 300 agents et déploiement de postes Windows 10."}
+       ]}
+    ]},
+    {"type": "project", "title": "Projets", "items": [
+      {"ref": "proj-1", "fields": {"title": "Laboratoire SIEM", "setting": "école", "start": "2025-01", "end": "2025-03", "technologies": ["Wazuh", "Sysmon", "Sigma"]},
+       "bullets": [{"ref": "proj-1-b1", "text": "Mise en place d'un SIEM Wazuh et écriture de 15 règles Sigma testées sur des journaux simulés."}]},
+      {"ref": "proj-2", "fields": {"title": "Capture The Flag FCSC", "setting": "ctf", "start": "2024-04", "end": "2024-04"},
+       "bullets": [{"ref": "proj-2-b1", "text": "Classement dans le premier quart (catégories forensique et web)."}]}
+    ]},
+    {"type": "education", "title": "Formation", "items": [
+      {"ref": "edu-1", "fields": {"degree": "Master 2 Cybersécurité", "school": "Université Paris-Est Créteil", "start": "2025-09", "end": "2026-09", "details": "Sécurité des systèmes, investigation numérique, gestion des risques (EBIOS RM)."}, "bullets": []},
+      {"ref": "edu-2", "fields": {"degree": "Licence Informatique", "school": "Université Paris-Est Créteil", "start": "2021-09", "end": "2024-06"}, "bullets": []}
+    ]},
+    {"type": "certification", "title": "Certifications", "items": [
+      {"ref": "cert-1", "fields": {"name": "SecNumacadémie", "issuer": "ANSSI", "date": "2025-06"}, "bullets": []}
+    ]},
+    {"type": "language", "title": "Langues", "items": [
+      {"ref": "lang-1", "fields": {"name": "Anglais", "level": "C1 (courant)"}, "bullets": []},
+      {"ref": "lang-2", "fields": {"name": "Espagnol", "level": "B1"}, "bullets": []}
+    ]},
+    {"type": "skills", "title": "Compétences", "groups": [
+      {"label": "Détection", "skills": [{"ref": "skill-splunk", "text": "Splunk (avancé)"}, {"ref": "skill-wazuh", "text": "Wazuh (intermédiaire)"}, {"ref": "skill-sigma", "text": "Sigma (intermédiaire)"}]},
+      {"label": "Systèmes et réseaux", "skills": [{"ref": "skill-linux", "text": "Linux (avancé)"}, {"ref": "skill-ad", "text": "Active Directory (intermédiaire)"}, {"ref": "skill-wireshark", "text": "Wireshark (intermédiaire)"}]},
+      {"label": "Développement", "skills": [{"ref": "skill-python", "text": "Python (avancé)"}, {"ref": "skill-bash", "text": "Bash (intermédiaire)"}, {"ref": "skill-kql", "text": "KQL (notion)"}]}
+    ]}
+  ]
+}

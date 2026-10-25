@@ -1,0 +1,35 @@
+{
+  "kind": "cv",
+  "language": "en",
+  "base_source_id": "src-3",
+  "template": {"kind": "jobradar", "id": "technique-projets"},
+  "headline": "Security Engineering Intern",
+  "summary": "Final-year cybersecurity master's student looking for a six-month internship in detection engineering, starting March 2027.",
+  "sections": [
+    {"type": "experience", "title": "Professional Experience", "items": [
+      {"ref": "exp-1", "fields": {"title": "SOC Analyst (apprenticeship)", "organization": "Acme Security", "location": "Paris, France", "start": "2024-09", "end": null},
+       "bullets": [
+         {"ref": "exp-1-b1", "text": "Triaged about 40 alerts a day in Splunk Enterprise Security and escalated confirmed incidents."},
+         {"ref": "exp-1-b2", "text": "Wrote Python enrichment scripts that cut manual triage time by a third."}
+       ]}
+    ]},
+    {"type": "project", "title": "Projects", "items": [
+      {"ref": "proj-1", "fields": {"title": "Detection-as-code pipeline", "setting": "perso", "start": "2025-02", "end": "2025-05", "technologies": ["Sigma", "GitHub Actions", "Elastic"], "link": "https://github.com/camille-martin/detection-as-code"},
+       "bullets": [{"ref": "proj-1-b1", "text": "Converted 25 Sigma rules to Elastic queries and tested them automatically against recorded attack data."}]},
+      {"ref": "proj-2", "fields": {"title": "Home lab with Active Directory", "setting": "perso", "start": "2024-01", "end": "2024-03", "technologies": ["Windows Server", "BloodHound"]},
+       "bullets": [{"ref": "proj-2-b1", "text": "Built a vulnerable domain to practise privilege escalation paths and their detection."}]}
+    ]},
+    {"type": "education", "title": "Education", "items": [
+      {"ref": "edu-1", "fields": {"degree": "MSc Cybersecurity", "school": "Université Paris-Est Créteil", "start": "2025-09", "end": "2026-09"}, "bullets": []},
+      {"ref": "edu-2", "fields": {"degree": "BSc Computer Science", "school": "Université Paris-Est Créteil", "start": "2021-09", "end": "2024-06"}, "bullets": []}
+    ]},
+    {"type": "language", "title": "Languages", "items": [
+      {"ref": "lang-1", "fields": {"name": "French", "level": "native"}, "bullets": []},
+      {"ref": "lang-2", "fields": {"name": "English", "level": "C1 (fluent)"}, "bullets": []}
+    ]},
+    {"type": "skills", "title": "Skills", "groups": [
+      {"label": "Detection", "skills": [{"ref": "s1", "text": "Splunk (advanced)"}, {"ref": "s2", "text": "Sigma (intermediate)"}, {"ref": "s3", "text": "Elastic (intermediate)"}]},
+      {"label": "Programming", "skills": [{"ref": "s4", "text": "Python (advanced)"}, {"ref": "s5", "text": "C++ (basic)"}]}
+    ]}
+  ]
+}

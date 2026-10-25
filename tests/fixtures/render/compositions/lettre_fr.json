@@ -1,0 +1,16 @@
+{
+  "kind": "lettre",
+  "language": "fr",
+  "base_source_id": "src-4",
+  "template": {"kind": "jobradar", "id": "sobre-ats"},
+  "subject": "Candidature au stage d'analyste SOC (réf. SOC-2027-03)",
+  "greeting": "Madame, Monsieur,",
+  "paragraphs": [
+    "Actuellement en Master 2 Cybersécurité à l'Université Paris-Est Créteil, je vous propose ma candidature pour le stage d'analyste SOC de six mois publié par votre équipe, à partir de mars 2027.",
+    "Depuis deux ans, mon alternance chez Acme Sécurité m'amène à qualifier chaque jour une quarantaine d'alertes dans Splunk Enterprise Security, à escalader les incidents avérés et à rédiger des procédures de réponse. J'y ai aussi développé des scripts Python d'enrichissement qui accélèrent le tri des alertes.",
+    "Votre offre insiste sur l'amélioration continue des règles de détection : c'est précisément le sujet de mon projet de laboratoire SIEM, au cours duquel j'ai écrit et testé une quinzaine de règles Sigma. Je serais heureux de mettre cette démarche au service de votre centre opérationnel.",
+    "Je me tiens à votre disposition pour un entretien, à votre convenance, afin de vous présenter plus en détail mon parcours et ma motivation."
+  ],
+  "closing": "Je vous prie d'agréer, Madame, Monsieur, l'expression de mes salutations distinguées.",
+  "facts_refs": ["exp-1", "proj-1"]
+}

@@ -1,0 +1,59 @@
+{
+  "kind": "cv",
+  "language": "fr",
+  "base_source_id": "src-2",
+  "template": {"kind": "jobradar", "id": "moderne-ats"},
+  "headline": "Ingénieure sécurité des systèmes d'information",
+  "summary": "Ingénieure sécurité avec six ans d'expérience en exploitation, détection et durcissement d'infrastructures hybrides ; habituée à piloter des projets de mise en conformité (ISO 27001, NIS 2).",
+  "sections": [
+    {"type": "experience", "title": "Expérience professionnelle", "items": [
+      {"ref": "exp-1", "fields": {"title": "Ingénieure sécurité opérationnelle", "organization": "Banque Exemple", "location": "La Défense", "start": "2023-02", "end": null},
+       "bullets": [
+         {"ref": "exp-1-b1", "text": "Pilotage du déploiement d'un EDR sur 4 000 postes et serveurs, avec un taux de couverture de 98 % en six mois."},
+         {"ref": "exp-1-b2", "text": "Animation de la cellule de crise lors de deux incidents majeurs et rédaction des retours d'expérience."},
+         {"ref": "exp-1-b3", "text": "Définition des cas d'usage de détection avec le SOC externalisé et suivi mensuel des indicateurs."}
+       ]},
+      {"ref": "exp-2", "fields": {"title": "Consultante sécurité", "organization": "Cabinet Conseil Exemple", "location": "Paris", "start": "2020-09", "end": "2023-01"},
+       "bullets": [
+         {"ref": "exp-2-b1", "text": "Audits de configuration Active Directory et Microsoft 365 pour 14 clients des secteurs public et industriel."},
+         {"ref": "exp-2-b2", "text": "Accompagnement de trois clients vers la certification ISO 27001 (analyse de risques, plan de traitement)."},
+         {"ref": "exp-2-b3", "text": "Formation de 120 collaborateurs à la sensibilisation au hameçonnage."}
+       ]},
+      {"ref": "exp-3", "fields": {"title": "Administratrice systèmes et réseaux", "organization": "Groupe Industriel Exemple", "location": "Lyon", "start": "2018-09", "end": "2020-08"},
+       "bullets": [
+         {"ref": "exp-3-b1", "text": "Administration de 250 serveurs Linux et Windows et migration de la messagerie vers Exchange Online."},
+         {"ref": "exp-3-b2", "text": "Mise en place de la supervision Zabbix et des sauvegardes Veeam."}
+       ]},
+      {"ref": "exp-4", "fields": {"title": "Technicienne réseau (alternance)", "organization": "Opérateur Télécom Exemple", "location": "Lyon", "start": "2016-09", "end": "2018-08"},
+       "bullets": [
+         {"ref": "exp-4-b1", "text": "Configuration de commutateurs et pare-feu Fortinet sur 30 sites distants."}
+       ]}
+    ]},
+    {"type": "project", "title": "Projets", "items": [
+      {"ref": "proj-1", "fields": {"title": "Durcissement automatisé de serveurs Linux", "setting": "perso", "start": "2024-01", "end": "2024-06", "technologies": ["Ansible", "CIS Benchmarks", "GitLab CI"]},
+       "bullets": [{"ref": "proj-1-b1", "text": "Rôles Ansible appliquant 180 contrôles CIS, vérifiés à chaque modification par une chaîne d'intégration continue."}]},
+      {"ref": "proj-2", "fields": {"title": "Plateforme d'entraînement à la réponse aux incidents", "setting": "autre", "organization": "Association Cyber Exemple", "start": "2022-03", "end": "2022-12", "technologies": ["Docker", "Elastic", "Velociraptor"]},
+       "bullets": [{"ref": "proj-2-b1", "text": "Conception de cinq scénarios d'attaque réalistes utilisés lors d'ateliers bénévoles."}]},
+      {"ref": "proj-3", "fields": {"title": "Analyse de logiciels malveillants", "setting": "perso", "start": "2021-05", "end": "2021-09", "technologies": ["Ghidra", "YARA"]},
+       "bullets": [{"ref": "proj-3-b1", "text": "Rédaction de règles YARA publiées sur un dépôt public après analyse de 20 échantillons."}]}
+    ]},
+    {"type": "education", "title": "Formation", "items": [
+      {"ref": "edu-1", "fields": {"degree": "Diplôme d'ingénieur, spécialité sécurité informatique", "school": "École d'ingénieurs Exemple", "start": "2016-09", "end": "2018-09"}, "bullets": []},
+      {"ref": "edu-2", "fields": {"degree": "DUT Réseaux et télécommunications", "school": "IUT de Lyon", "start": "2014-09", "end": "2016-06"}, "bullets": []}
+    ]},
+    {"type": "certification", "title": "Certifications", "items": [
+      {"ref": "cert-1", "fields": {"name": "ISO/IEC 27001 Lead Implementer", "issuer": "PECB", "date": "2022-11"}, "bullets": []},
+      {"ref": "cert-2", "fields": {"name": "CompTIA Security+", "issuer": "CompTIA", "date": "2020-03"}, "bullets": []}
+    ]},
+    {"type": "language", "title": "Langues", "items": [
+      {"ref": "lang-1", "fields": {"name": "Anglais", "level": "C1 (courant)"}, "bullets": []},
+      {"ref": "lang-2", "fields": {"name": "Allemand", "level": "B2"}, "bullets": []},
+      {"ref": "lang-3", "fields": {"name": "Italien", "level": "A2 (notions)"}, "bullets": []}
+    ]},
+    {"type": "skills", "title": "Compétences", "groups": [
+      {"label": "Sécurité", "skills": [{"ref": "s1", "text": "EDR (avancé)"}, {"ref": "s2", "text": "SIEM (avancé)"}, {"ref": "s3", "text": "Gestion de crise (avancé)"}, {"ref": "s4", "text": "ISO 27001 (avancé)"}, {"ref": "s5", "text": "EBIOS RM (intermédiaire)"}]},
+      {"label": "Infrastructures", "skills": [{"ref": "s6", "text": "Active Directory (avancé)"}, {"ref": "s7", "text": "Microsoft 365 (avancé)"}, {"ref": "s8", "text": "Linux (avancé)"}, {"ref": "s9", "text": "Fortinet (intermédiaire)"}]},
+      {"label": "Automatisation", "skills": [{"ref": "s10", "text": "Ansible (avancé)"}, {"ref": "s11", "text": "Python (intermédiaire)"}, {"ref": "s12", "text": "PowerShell (intermédiaire)"}]}
+    ]}
+  ]
+}

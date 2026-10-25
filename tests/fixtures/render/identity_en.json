@@ -1,0 +1,10 @@
+{
+  "full_name": "Camille Martin",
+  "email": "camille.martin@example.test",
+  "phone": "+33 6 12 34 56 78",
+  "city": "Paris, France",
+  "links": [
+    {"label": "LinkedIn", "url": "https://www.linkedin.com/in/camille-martin-exemple"},
+    {"label": "GitHub", "url": "https://github.com/camille-martin"}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "kind": "lettre",
+  "language": "en",
+  "base_source_id": "src-5",
+  "template": {"kind": "jobradar", "id": "moderne-ats"},
+  "subject": "Application for the Detection Engineering Internship",
+  "greeting": "Dear Hiring Manager,",
+  "paragraphs": [
+    "I am a final-year MSc Cybersecurity student and would like to apply for the six-month detection engineering internship starting in March 2027.",
+    "During my apprenticeship at Acme Security I triage about forty alerts a day in Splunk Enterprise Security and wrote Python enrichment scripts that cut manual triage time by a third.",
+    "I would welcome the opportunity to discuss how my detection-as-code project could support your team."
+  ],
+  "closing": "Kind regards,",
+  "facts_refs": ["exp-1", "proj-1"]
+}
