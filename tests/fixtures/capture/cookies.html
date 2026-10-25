@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Offre avec consentement</title>
+</head>
+<body>
+  <div id="consentement">
+    <p>Nous utilisons des cookies pour mesurer l'audience.</p>
+    <button type="button" onclick="refuser()">Tout refuser</button>
+  </div>
+  <main id="offre"></main>
+  <script>
+    function refuser() {
+      document.querySelector('#consentement').remove();
+      document.querySelector('#offre').innerHTML = `
+        <h1>Stage ingénierie sécurité</h1>
+        <p>Le refus a bien été pris en compte.</p>
+        <p>Vous contribuez aux revues de sécurité, à la qualification des vulnérabilités et à la rédaction des
+        recommandations. Vous travaillez avec les équipes produit afin de suivre les corrections et de consolider
+        les bonnes pratiques. Cette description contient volontairement assez de texte pour représenter une annonce
+        complète et pour distinguer le contenu chargé après le refus du court bandeau de consentement initial.</p>`;
+    }
+  </script>
+</body>
+</html>
