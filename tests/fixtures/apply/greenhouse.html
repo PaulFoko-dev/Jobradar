@@ -1,0 +1,10 @@
+<!doctype html><form id="application_form" action="/applications/42" method="post">
+  <label for="first_name">Prénom *</label><input id="first_name" name="job_application[first_name]" required>
+  <label for="last_name">Nom *</label><input id="last_name" name="job_application[last_name]" required>
+  <label for="email">E-mail *</label><input id="email" name="job_application[email]" type="email" required>
+  <label for="phone">Téléphone</label><input id="phone" name="job_application[phone]" type="tel">
+  <label for="resume">CV *</label><input id="resume" name="job_application[resume]" type="file" required>
+  <label for="cover">Lettre de motivation</label><input id="cover" name="job_application[cover_letter]" type="file">
+  <label for="motivation">Pourquoi ce poste ? *</label><textarea id="motivation" name="question_1" required></textarea>
+  <button type="submit">Envoyer</button>
+</form>

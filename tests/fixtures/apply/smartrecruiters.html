@@ -1,0 +1,10 @@
+<!doctype html><form id="st-apply" data-test="application-form">
+  <label for="given">First name</label><input id="given" name="candidate.firstName" required>
+  <label for="family">Last name</label><input id="family" name="candidate.lastName" required>
+  <label for="mail">Email</label><input id="mail" name="candidate.email" type="email" aria-required="true">
+  <label for="cv">Resume</label><input id="cv" name="attachments.resume" type="file" required>
+  <label for="gender">Gender</label><select id="gender" name="diversity.gender" required>
+    <option value="">Choose</option><option value="f">Female</option><option value="m">Male</option>
+  </select>
+  <button type="submit">Apply</button>
+</form>
