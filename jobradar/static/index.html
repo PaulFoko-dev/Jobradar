@@ -9,6 +9,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="icon" type="image/png" href="/static/img/favicon.png">
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/profile.css">
+  <link rel="stylesheet" href="/static/documents.css">
+  <link rel="stylesheet" href="/static/apply.css">
   <script>
     try { const t = localStorage.getItem("jr-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
   </script>
@@ -29,9 +32,26 @@
       <span><svg viewBox="0 0 24 24" class="ic stroke"><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg> Mes candidatures</span>
       <span class="count" id="trackerCount">0</span>
     </button>
+    <button class="search-item nav-profile" id="profileNav">
+      <span>Mon profil</span>
+    </button>
+    <button class="search-item nav-notif" id="notifNav" aria-haspopup="dialog" aria-controls="notifPanel" aria-label="Notifications">
+      <span><svg viewBox="0 0 24 24" class="ic stroke"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg> Notifications</span>
+      <span class="count" id="notifCount">0</span>
+    </button>
     <div class="side-title">Mes recherches</div>
     <nav id="searchList" class="search-list"></nav>
-    <div class="side-foot">Analyse par <span class="ai-label">l'IA</span><br>Collecte depuis ce PC</div>
+    <button class="search-item nav-settings" id="settingsNav" aria-haspopup="dialog">
+      <span><svg viewBox="0 0 24 24" class="ic stroke"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Réglages</span>
+    </button>
+    <div class="side-foot">
+      <label for="aiProvider">Analyse avec</label>
+      <select id="aiProvider" data-ai-provider aria-label="Assistant utilisé pour les analyses">
+        <option value="claude">Claude Code</option>
+        <option value="codex">Codex</option>
+      </select>
+      <small id="aiProviderStatus">Collecte depuis ce PC</small>
+    </div>
   </aside>
 
   <main class="main">
@@ -91,6 +111,12 @@
         <div class="panel">
           <h2>Ou décris ta recherche</h2>
           <textarea id="fPrompt" class="prompt" rows="9" placeholder="ex. Je cherche un stage de fin d'études (bac+5) de 6 mois en cybersécurité à partir de janvier, en Île-de-France ou autour de Limoges. Plutôt pentest, SOC ou audit. Pas d'offres qui demandent de l'expérience."></textarea>
+          <label class="field ai-provider-field"><span>Assistant pour cette analyse</span>
+            <select id="criteriaAIProvider" data-ai-provider>
+              <option value="claude">Claude Code</option>
+              <option value="codex">Codex</option>
+            </select>
+          </label>
           <button class="btn primary block lg" id="analyzeBtn">
             <svg viewBox="0 0 24 24" class="ic"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/></svg>
             Analyser avec <span class="ai-label">l'IA</span>
@@ -148,7 +174,7 @@
       </div>
 
       <div class="filters">
-        <input id="qText" type="search" placeholder="Filtrer (intitulé, entreprise, ville…)">
+        <input id="qText" type="search" aria-label="Filtrer les offres" placeholder="Filtrer (intitulé, entreprise, ville…)">
         <div class="filter-group">
           <span>Zone</span>
           <div class="segmented sm" id="qZone"><button data-v="strict">Stricte</button><button data-v="flex">Souple</button></div>
@@ -158,14 +184,15 @@
         </div>
         <div class="filter-group">
           <span>Score ≥ <b id="qMinVal"></b></span>
-          <input id="qMin" type="range" min="0" max="100" step="5">
+          <input id="qMin" type="range" aria-label="Score minimum" min="0" max="100" step="5">
         </div>
-        <select id="qStatus">
+        <select id="qStatus" aria-label="Statut des offres">
           <option value="active">À traiter</option><option value="fav">Favoris</option>
           <option value="applied">Dans le suivi</option><option value="ignored">Masquées</option><option value="all">Toutes</option>
+          <option value="excluded">Entreprises exclues</option>
         </select>
-        <select id="qSource"><option value="">Toutes les sources</option></select>
-        <select id="qSort"><option value="score">Pertinence</option><option value="date">Plus récentes</option></select>
+        <select id="qSource" aria-label="Source"><option value="">Toutes les sources</option></select>
+        <select id="qSort" aria-label="Trier par"><option value="priority">À faire en priorité</option><option value="score">Pertinence</option><option value="date">Plus récentes</option></select>
       </div>
       <div id="stats" class="stats"></div>
       <div id="cards" class="cards"></div>
@@ -184,10 +211,15 @@
           <button class="btn primary" id="addAppBtn">+ Ajouter</button>
         </div>
       </header>
+      <div id="tFollow" class="follow-banner" hidden></div>
       <div id="tStats" class="funnel"></div>
       <div id="tKanban" class="kanban"></div>
       <div id="tList" class="panel table-wrap" hidden></div>
       <div id="tEmpty" class="empty" hidden>Aucune candidature suivie pour l'instant. Ouvre une offre et clique sur « Voir l'offre et candidater ».</div>
+    </section>
+
+    <section id="viewProfile" class="view" hidden>
+      <div id="profileRoot" aria-live="polite"></div>
     </section>
 
     <section id="viewWelcome" class="view">
@@ -210,8 +242,33 @@
   </article>
 </div>
 
-<div id="toast" class="toast" hidden></div>
+<!-- ========== Fenêtre secondaire (confirmation, brouillon de relance), au-dessus de la fiche ========== -->
+<div id="dialog" class="modal dialog" hidden>
+  <div class="modal-backdrop" data-dclose></div>
+  <article class="modal-card" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+    <button class="modal-close" data-dclose aria-label="Fermer">×</button>
+    <div id="dialogBody"></div>
+  </article>
+</div>
+
+<!-- ========== Panneau des notifications ========== -->
+<div id="notifPanel" class="drawer" hidden>
+  <div class="drawer-backdrop" data-nclose></div>
+  <aside class="drawer-card" role="dialog" aria-modal="true" aria-labelledby="notifTitle">
+    <header class="drawer-head">
+      <h2 id="notifTitle">Notifications</h2>
+      <button class="link" id="notifAll">Tout marquer comme lu</button>
+      <button class="modal-close" data-nclose aria-label="Fermer les notifications">×</button>
+    </header>
+    <div id="notifList" class="notif-list"></div>
+  </aside>
+</div>
+
+<div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 <div id="confirm" class="confirm" hidden></div>
 <script src="/static/app.js"></script>
+<script src="/static/profile-ui.js"></script>
+<script src="/static/documents-ui.js"></script>
+<script src="/static/apply-ui.js"></script>
 </body>
 </html>
