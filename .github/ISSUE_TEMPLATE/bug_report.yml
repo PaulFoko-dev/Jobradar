@@ -1,0 +1,66 @@
+name: Signaler un problème
+description: Un comportement inattendu, une erreur ou une source qui ne fonctionne plus.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de prendre le temps de signaler ce problème.
+        ⚠️ **Ne colle aucune donnée personnelle** : CV, lettre, coordonnées, contenu de `data/`, jetons ou identifiants.
+  - type: textarea
+    id: description
+    attributes:
+      label: Ce qui se passe
+      description: Décris le problème et ce que tu attendais à la place.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Étapes pour reproduire
+      placeholder: |
+        1. Ouvrir la recherche…
+        2. Cliquer sur…
+        3. Constater que…
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Système
+      options: [Linux, Windows, macOS]
+    validations:
+      required: true
+  - type: dropdown
+    id: ai
+    attributes:
+      label: Assistant IA utilisé
+      options: [Claude Code, Codex, Sans objet]
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Version de Python
+      placeholder: "ex. 3.12.4 (python --version)"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Partie concernée
+      multiple: true
+      options:
+        - Analyse des critères
+        - Collecte (une source précise)
+        - Analyse des offres
+        - Suivi des candidatures
+        - Relances, entretiens ou notifications
+        - Installation ou mise à jour quotidienne
+        - Interface
+        - Autre
+  - type: textarea
+    id: logs
+    attributes:
+      label: Journal ou message d'erreur
+      description: Extrait du journal d'actualisation ou de la console. Relis-le pour retirer toute donnée personnelle.
+      render: text

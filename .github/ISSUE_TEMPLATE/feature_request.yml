@@ -1,0 +1,32 @@
+name: Proposer une amélioration
+description: Une idée de fonctionnalité ou une nouvelle source d'offres.
+title: "[Idée] "
+labels: ["amélioration"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: Le besoin
+      description: Quel problème rencontres-tu aujourd'hui ? Pour qui ?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: La proposition
+      description: Ce que JobRadar pourrait faire. Une maquette ou un exemple est bienvenu.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives envisagées
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Vérifications
+      options:
+        - label: J'ai vérifié que l'idée n'est pas déjà proposée ou prévue dans `docs/etude-faisabilite-cv-lettre.md`.
+          required: true
+        - label: La proposition respecte les conditions d'utilisation des sites concernés et la vie privée des utilisateurs.
+          required: true

@@ -3,5 +3,15 @@
 __pycache__/
 *.pyc
 
+# Caches des outils de qualité
+.pytest_cache/
+.ruff_cache/
+
 # Données personnelles : base d'offres, candidatures, configuration (identifiants éventuels)
 data/
+
+# Archives des candidatures (offres capturées, documents) : jamais versionnées
+candidatures/
+
+# Espaces de travail temporaires des assistants (supprimés après intégration)
+.travail/

@@ -1,0 +1,107 @@
+name: Qualité
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux · Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.14"]
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest==8.3.5 ruff==0.9.10
+
+      - name: Vérifier la syntaxe des scripts Bash
+        run: bash -n run.sh install_daily.sh
+
+      - name: Vérifier le style et les erreurs statiques
+        run: python -m ruff check jobradar tests
+
+      - name: Exécuter les tests
+        run: python -m pytest
+
+      - name: Tester le lanceur Linux
+        if: matrix.python-version == '3.12'
+        run: ./run.sh --help
+
+  windows:
+    name: Windows · Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.14"]
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Installer les dépendances
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest==8.3.5 ruff==0.9.10
+
+      - name: Vérifier la syntaxe des scripts PowerShell
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($script in @('install_daily.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $script),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              $failed = $true
+            }
+          }
+          if ($failed) { throw 'Au moins un script PowerShell est invalide.' }
+
+      - name: Vérifier le style et les erreurs statiques
+        run: python -m ruff check jobradar tests
+
+      - name: Exécuter les tests
+        run: python -m pytest
+
+      - name: Tester le lanceur Windows
+        if: matrix.python-version == '3.12'
+        shell: cmd
+        run: run.bat --help
