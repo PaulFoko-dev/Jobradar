@@ -34,6 +34,7 @@ def _parse_offer(html: str, url: str) -> dict | None:
             "location": city or None,
             "contract": ", ".join(et) if isinstance(et, list) else et,
             "date_posted": (data.get("datePosted") or "")[:10] or None,
+            "published_at": data.get("datePosted"),
             "description": html_to_text(data.get("description")),
             "url": url,
             "source": "hellowork",

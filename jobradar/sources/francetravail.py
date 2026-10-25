@@ -63,6 +63,7 @@ def collect(criteria: dict, cfg: dict, known_urls: set, log) -> list[dict]:
                     "location": (o.get("lieuTravail") or {}).get("libelle"),
                     "contract": o.get("typeContratLibelle"),
                     "date_posted": (o.get("dateCreation") or "")[:10] or None,
+                    "published_at": o.get("dateCreation"),
                     "description": o.get("description", ""),
                     "url": url,
                     "source": "francetravail",

@@ -52,6 +52,7 @@ def _offer(h: dict) -> dict:
         "location": ", ".join(x for x in (office.get("city"), office.get("local_state")) if x) or None,
         "contract": CONTRACT_LABEL.get(h.get("contract_type"), h.get("contract_type")),
         "date_posted": (h.get("published_at") or "")[:10] or None,
+        "published_at": h.get("published_at"),
         "description": desc,
         "url": f"https://www.welcometothejungle.com/fr/companies/{org.get('slug')}/jobs/{h['slug']}",
         "source": "welcometothejungle",

@@ -9,12 +9,13 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from . import ai, db
+from . import ai, db, notifications
 from .config import load_config
-from .matching import UNKNOWN_CONTRACT, DedupIndex, dedup_key, priority, relevance
+from .matching import UNKNOWN_CONTRACT, DedupIndex, dedup_key, relevance, scoring_order
 from .sources import SOURCES
 from .sources.common import polite_pause
 from .sources.jobspy_src import fetch_linkedin_details
+from .workflow import normalize_company
 
 _lock = threading.Lock()
 STATE = {"running": False, "search_id": None, "phase": "idle", "message": "", "progress": 0.0, "log": []}
@@ -106,11 +107,19 @@ def _collect(search_id: int, crit: dict, cfg: dict, index: DedupIndex, stats: di
          f"{stats['new']} nouvelles")
 
 
-def _score(search_id: int, crit: dict, cfg: dict, stats: dict):
-    pending = db.offers_to_score(search_id, 100_000)
-    todo = sorted(pending, key=lambda o: priority(o, crit))[: cfg["max_offers_scored_per_run"]]
+def _pending_scoring(search_id: int) -> list[dict]:
+    """Offres à analyser, sans celles des entreprises exclues (économie de quota IA)."""
+    excluded = db.excluded_company_keys()
+    return [o for o in db.offers_to_score(search_id, 100_000)
+            if normalize_company(o["company"] or "") not in excluded]
+
+
+def _score(search_id: int, crit: dict, cfg: dict, stats: dict) -> list[dict]:
+    """Analyse les offres en attente ; renvoie les offres analysées à cette exécution."""
+    pending = _pending_scoring(search_id)
+    todo = sorted(pending, key=lambda o: scoring_order(o, crit))[: cfg["max_offers_scored_per_run"]]
     if not todo:
-        return
+        return []
     _set(phase="enrich", message="Lecture des descriptions manquantes", progress=0.55)
     for o in todo:
         if len(o["description"] or "") < 200 and "linkedin.com" in o["url"]:
@@ -124,7 +133,7 @@ def _score(search_id: int, crit: dict, cfg: dict, stats: dict):
     batches = [todo[i:i + size] for i in range(0, len(todo), size)]
     _set(phase="score", message=f"Analyse par {label} : 0/{len(todo)} offres", progress=0.6)
     _log(f"Analyse de {len(todo)} offres par {label} ({len(batches)} lots, {len(pending) - len(todo)} reportées)")
-    done, quota_hit = 0, False
+    done, quota_hit, analyzed = 0, False, []
     with ThreadPoolExecutor(max_workers=cfg["scoring_parallel"]) as pool:
         futures = {pool.submit(ai.score_offers, crit, b): b for b in batches}
         for f in as_completed(futures):
@@ -133,12 +142,13 @@ def _score(search_id: int, crit: dict, cfg: dict, stats: dict):
             if f.cancelled():
                 continue
             try:
-                ids = {o["id"] for o in batch}
+                by_id = {o["id"]: o for o in batch}
                 for res in f.result():
-                    if res["id"] in ids:
+                    if res["id"] in by_id:
                         res["score"] = max(0, min(100, int(res["score"])))
                         db.save_analysis(res["id"], res)
                         stats["scored"] += 1
+                        analyzed.append(by_id[res["id"]] | res)
             except ai.QuotaError as e:
                 stats["errors"] += 1
                 if not quota_hit:
@@ -150,11 +160,39 @@ def _score(search_id: int, crit: dict, cfg: dict, stats: dict):
                 stats["errors"] += 1
                 _log(f"Analyse d'un lot échouée (reprise à la prochaine exécution) : {e}")
             _set(message=f"Analyse par {label} : {done}/{len(todo)} offres", progress=0.6 + 0.4 * done / len(todo))
-    stats["pending"] = len(db.offers_to_score(search_id, 100_000))
+    stats["pending"] = len(_pending_scoring(search_id))
+    return analyzed
 
 
-def run_search(search_id: int, score_only: bool = False) -> dict:
-    """Exécute une recherche complète. Une seule exécution à la fois."""
+def log_email(result: dict, log=None) -> None:
+    """Journalise le résultat de ``notifications.deliver_email_digest`` (aucun secret dans le message)."""
+    log = log or _log
+    if result["sent"]:
+        log(f"E-mail récapitulatif envoyé ({result['sent']} alerte(s))")
+    elif result["error"]:
+        log(f"E-mail non envoyé : {result['error']} Nouvel essai à la prochaine exécution.")
+
+
+def _notify(analyzed: list[dict], send_email: bool = True):
+    """Alertes et rappels de fin d'exécution ; un échec ici ne compromet jamais la recherche."""
+    try:
+        created = notifications.alert_high_score_offers(analyzed)
+        if created:
+            _log(f"{len(created)} offre(s) très pertinente(s) signalée(s)")
+            notifications.deliver_desktop(created, notifications.offers_desktop_text(created))
+        notifications.refresh_notifications()
+        if send_email:
+            log_email(notifications.deliver_email_digest())
+    except Exception as e:
+        _log(f"Notifications : échec {type(e).__name__}: {e}")
+
+
+def run_search(search_id: int, score_only: bool = False, *, send_email: bool = True) -> dict:
+    """Exécute une recherche complète. Une seule exécution à la fois.
+
+    ``send_email=False`` laisse l'appelant envoyer un seul récapitulatif pour
+    plusieurs recherches (``cli refresh``).
+    """
     if not _lock.acquire(blocking=False):
         raise RuntimeError("Une recherche est déjà en cours.")
     run_id = None
@@ -171,9 +209,10 @@ def run_search(search_id: int, score_only: bool = False) -> dict:
         index = cleanup(search_id, crit)
         if not score_only:
             _collect(search_id, crit, cfg, index, stats)
-        _score(search_id, crit, cfg, stats)
+        analyzed = _score(search_id, crit, cfg, stats)
 
         db.mark_search_run(search_id)
+        _notify(analyzed, send_email)
         _log(f"Terminé : {stats['new']} nouvelles offres, {stats['scored']} analysées, "
              f"{stats['pending']} en attente d'analyse")
         _set(phase="done", message="Terminé", progress=1.0)

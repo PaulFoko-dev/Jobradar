@@ -64,6 +64,22 @@ def priority(o: dict, crit: dict) -> float:
     )
 
 
+def _published_day(o: dict) -> date | None:
+    """Jour de publication (instant normalisé, sinon date de la source), à défaut jour où JobRadar l'a trouvée."""
+    for value in (o.get("published_at_utc"), o.get("date_posted"), o.get("first_seen")):
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError:
+            continue
+    return None
+
+
+def scoring_order(o: dict, crit: dict) -> tuple[float, float]:
+    """Ordre d'analyse IA : les offres les plus récentes d'abord, la pertinence départage un même jour."""
+    day = _published_day(o)
+    return (-day.toordinal() if day else 0.0, priority(o, crit))
+
+
 # ---------------------------------------------------------------- doublons
 
 def title_tokens(title: str) -> frozenset[str]:
