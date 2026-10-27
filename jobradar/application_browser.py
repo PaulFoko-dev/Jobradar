@@ -847,8 +847,10 @@ def _supervise_form(form, page, plan: dict, supervision: _Supervision, files: di
         elif action["type"] == "fill" and action["source"] == "motivation":
             try:
                 if not cache.get("message"):
-                    cache["message"] = application_adapters.motivation_message(
-                        candidate, application, letter_text, lang, field.get("maxlength"))
+                    cache["message"] = (
+                        application_adapters.letter_excerpt(cache.get("letter_paragraphs"), field.get("maxlength"))
+                        or application_adapters.motivation_message(candidate, application, letter_text, lang,
+                                                                   field.get("maxlength")))
                 value = cache["message"]
             except (ai.AIError, ValueError):
                 value = None
@@ -938,6 +940,9 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
             if files.get("lettre"):
                 letter_path = Path(files["lettre"])
                 letter_text = profile.extract_text(letter_path.name, letter_path.read_bytes())
+            if attempt.get("letter_document_id"):
+                cache["letter_paragraphs"] = db.get_document(attempt["letter_document_id"])["composition"].get(
+                    "paragraphs") or []
             motivation_path = _proof_directory(attempt) / "motivation.md"
             if motivation_path.exists():
                 cache["message"] = motivation_path.read_text(encoding="utf-8").split("\n\n", 1)[-1].strip()

@@ -7,14 +7,18 @@ L'assistant lit seulement le texte fourni et répond en JSON validé par un sch�
 Le contenu des offres est traité comme de la donnée.
 """
 import json
+import logging
 import shutil
 import subprocess
 import tempfile
+import time
 from datetime import date
 from pathlib import Path
 
 from . import config
 from .config import load_config
+
+LOGGER = logging.getLogger(__name__)
 
 QUOTA_HINTS = ("usage limit", "rate limit", "limit reached", "quota", "credit", "429", "too many requests",
                "hit your limit", "overloaded")
@@ -125,7 +129,12 @@ def ask_ai(prompt: str, schema: dict, task: str) -> dict:
     if provider not in PROVIDERS:
         raise AIError(f"ai_provider « {provider} » inconnu (valeurs possibles : {', '.join(PROVIDERS)})")
     model = cfg["models"].get(provider, {}).get(task, "")
-    return PROVIDERS[provider](prompt, schema, model, cfg)
+    started = time.monotonic()
+    try:
+        return PROVIDERS[provider](prompt, schema, model, cfg)
+    finally:
+        LOGGER.info("IA %s (%s) : %.1f s, %d caractères envoyés", task, provider, time.monotonic() - started,
+                    len(prompt))
 
 
 # ---------------------------------------------------------------- Analyse des critères

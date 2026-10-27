@@ -197,3 +197,27 @@ def test_formulaire_sans_balise_form_est_confine_au_plus_petit_conteneur() -> No
     match = adapter_for("generic").locate(page)
     assert match.selector == "[data-jobradar-form]"
     assert {field.name for field in match.fields} == {"name", "email", "resume"}
+
+
+def test_motivation_reprend_la_lettre_sans_appel_ia(monkeypatch) -> None:
+    from jobradar import ai
+    from jobradar.application_adapters import ai_plan, letter_excerpt
+    monkeypatch.setattr(ai, "ask_ai", lambda *_a: pytest.fail("aucun appel IA attendu"))
+    paragraphs = ["Élève ingénieur en cybersécurité, je souhaite rejoindre Acme pour ce stage SOC. "
+                  "Mon projet MatrixRecon automatise l'analyse de vulnérabilités en Python.",
+                  "J'ai aussi centralisé des journaux Linux et Windows dans un SIEM. " * 3]
+    assert letter_excerpt(paragraphs, 200) == ("Élève ingénieur en cybersécurité, je souhaite rejoindre Acme pour "
+                                               "ce stage SOC. Mon projet MatrixRecon automatise l'analyse de "
+                                               "vulnérabilités en Python.")
+    assert letter_excerpt(["Trop court."], 600) is None
+    plan = {"values": [], "ready": False, "interventions": [
+        {"selector": "#m", "label": "Motivation", "classification": "motivation", "maxlength": 400, "kind": "missing"}]}
+    result = ai_plan(plan, {"identity": {}}, {"company": "Acme"}, "", "fr", {"letter_paragraphs": paragraphs})
+    assert result["values"][0]["value"].startswith("Élève ingénieur") and len(result["values"][0]["value"]) <= 400
+
+
+def test_profil_envoye_a_l_ia_sans_metadonnees() -> None:
+    from jobradar.application_adapters import prompt_profile
+    candidate = {"schema": 1, "sources": [{"id": "src-1"}], "skills": [
+        {"name": "Linux", "level": "", "evidence": [], "id": "skill-1", "provenance": {"source": "src-1"}}]}
+    assert prompt_profile(candidate) == {"skills": [{"name": "Linux"}]}
