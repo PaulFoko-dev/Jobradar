@@ -254,9 +254,10 @@ def remember_form_answers(answers: list[dict]) -> dict:
     with LOCK:
         current = load_profile()
         standard = deepcopy(current["standard_answers"])
+        existing = {fold(item.get("question")) for item in standard.values() if isinstance(item, dict)}
         for item in answers:
             question = " ".join(str(item.get("label") or "").split())[:300]
-            if not question or item.get("kind") == "file":
+            if not question or item.get("kind") == "file" or item.get("sensitive") is True or fold(question) in existing:
                 continue
             raw_value = item.get("value")
             answer = ("Oui" if raw_value else "Non") if isinstance(raw_value, bool) else str(raw_value).strip()
@@ -266,8 +267,9 @@ def remember_form_answers(answers: list[dict]) -> dict:
             key = f"form_{_slug(question)[:48] or 'reponse'}_{digest}"
             standard[key] = {
                 "question": question, "answer": answer, "source": "formulaire_utilisateur",
-                "sensitive": item.get("sensitive") is True,
+                "sensitive": False,
             }
+            existing.add(fold(question))
         if standard == current["standard_answers"]:
             return current
         current["standard_answers"] = standard

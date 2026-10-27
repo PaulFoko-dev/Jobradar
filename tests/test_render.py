@@ -6,14 +6,15 @@ import os
 import sys
 import threading
 import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from docx import Document
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 from jobradar.render import RenderError, ats_check, list_templates, render_cv, render_letter
-from jobradar.render.chromium import print_variants
+from jobradar.render.chromium import print_variants, remove_trailing_blank_page
 from jobradar.render.jobradar_html import cv_html, letter_html
 
 FIXTURES = Path(__file__).parent / "fixtures" / "render"
@@ -271,3 +272,12 @@ def test_missing_browser_is_a_controlled_error(tmp_path: Path, monkeypatch: pyte
     with pytest.raises(RenderError, match="navigateur"):
         _render_cv(tmp_path, _load("stage_cyber"), _load("identity"), "sobre-ats")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_trailing_blank_pdf_page_is_removed() -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    writer.add_blank_page(width=595, height=842)
+    raw = BytesIO()
+    writer.write(raw)
+    assert len(PdfReader(BytesIO(remove_trailing_blank_page(raw.getvalue()))).pages) == 1

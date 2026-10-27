@@ -110,7 +110,7 @@ def _original_pdf(document: DocumentObject, docx: bytes, *, title: str, author: 
         warnings.append(_NO_LIBREOFFICE)
         html = docx_to_html(document, title=title, author=author, language=language)
         pdf, _, _ = chromium.print_variants([html])
-    return pdf
+    return chromium.remove_trailing_blank_page(pdf)
 
 
 def _write(out_dir: Path, base_name: str, pdf: bytes, docx: bytes, warnings: list[str]) -> RenderResult:

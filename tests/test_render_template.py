@@ -172,6 +172,20 @@ def test_letter_with_date_before_recipient_drops_the_old_recipient(tmp_path: Pat
     assert report.readability == 100
 
 
+def test_letter_recipient_block_is_readdressed_to_the_offer_company(tmp_path: Path) -> None:
+    source = modeles.letter(tmp_path / "modele.docx")
+    mapping = analyze_docx_template(source)
+    letter = _load("lettre_fr") | {"recipient": ["Service recrutement", "Nouvelle Entreprise", "Tour Alpha",
+                                                 "92000 Nanterre"]}
+    result = render_letter(letter, _load("identity"), template=ORIGINAL, template_map=mapping,
+                           out_dir=tmp_path / "sortie", base_name="Camille_Martin_Original")
+    texts = [text for text in _body_texts(Document(result.docx_path)) if text]
+    start = texts.index("Service recrutement")
+    assert texts[start:start + 4] == letter["recipient"]
+    assert not any("ncien" in text or "69000" in text for text in texts)
+    assert not any("destinataire" in warning for warning in result.warnings)
+
+
 def test_page_number_footer_is_not_an_ats_issue(tmp_path: Path) -> None:
     mapping = analyze_docx_template(modeles.page_number_footer(tmp_path / "modele.docx"))
     assert mapping.issues == [] and mapping.ats_compatible is True

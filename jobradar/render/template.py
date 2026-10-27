@@ -953,10 +953,15 @@ def fill_letter(document: DocumentObject, template_map: TemplateMap, letter: dic
         existing = [p for p in elements["letter_recipient"] if compact_text(paragraph_text(p))]
         for position, p in enumerate(existing):
             if position < len(lines):
-                _set_text(p, parent, lines[position] if position < len(existing) - 1 else
-                          " ".join(lines[position:]))
+                _set_text(p, parent, lines[position])
             else:
                 _remove(p)
+        if existing and len(lines) > len(existing):
+            # Lignes supplémentaires : clones du dernier paragraphe du bloc, pour garder sa mise en forme.
+            writer = _Writer(parent, existing[-1])
+            for line in lines[len(existing):]:
+                writer.clone(existing[-1])
+                _set_text(writer.anchor, parent, line)
         if not lines:
             warnings.append("Le bloc destinataire de la lettre d'origine a été retiré (il visait une autre "
                             "candidature) : ajoute-le dans le DOCX si besoin.")

@@ -37,6 +37,27 @@ def page_count(pdf: bytes) -> int:
         raise RenderError("Le navigateur a produit un PDF illisible.") from exc
 
 
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00a0"), None)
+
+
+def remove_trailing_blank_page(pdf: bytes) -> bytes:
+    """Retire uniquement une dernière page sans aucun texte (débordement de paragraphe vide)."""
+    try:
+        reader = PdfReader(BytesIO(pdf))
+        # Les modèles Word laissent souvent un espace insécable ou de largeur nulle sur la page en trop.
+        text = (reader.pages[-1].extract_text() or "").translate(_INVISIBLE).strip()
+        if len(reader.pages) < 2 or text:
+            return pdf
+        writer = PdfWriter()
+        for page in reader.pages[:-1]:
+            writer.add_page(page)
+        output = BytesIO()
+        writer.write(output)
+        return output.getvalue()
+    except Exception:
+        return pdf
+
+
 def print_variants(variants: Sequence[str], *, target_pages: int | None = None) -> tuple[bytes, int, int]:
     """Imprime les variantes HTML dans l'ordre et s'arrête à la première qui tient en `target_pages` pages.
 
@@ -65,6 +86,7 @@ def print_variants(variants: Sequence[str], *, target_pages: int | None = None) 
                     pdf = page.pdf(prefer_css_page_size=True, print_background=True, tagged=True, outline=False)
                     if not pdf.startswith(b"%PDF"):
                         raise RenderError("Le navigateur a produit un PDF invalide.")
+                    pdf = remove_trailing_blank_page(pdf)
                     results.append((pdf, page_count(pdf)))
                     if target_pages is None or results[-1][1] <= target_pages:
                         break

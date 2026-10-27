@@ -148,14 +148,16 @@
 
   function letterHtml(letter) {
     if (!letter) return "";
-    return `<div class="doc-preview"><h4>${esc(letter.subject || "Lettre proposée")}</h4><p>${esc(letter.greeting || "")}</p>
+    const recipient = (letter.recipient || []).length ? `<p class="doc-recipient">${letter.recipient.map(esc).join("<br>")}</p>` : "";
+    return `<div class="doc-preview">${recipient}<h4>${esc(letter.subject || "Lettre proposée")}</h4><p>${esc(letter.greeting || "")}</p>
       ${(letter.paragraphs || []).map(paragraph => `<p>${esc(paragraph)}</p>`).join("")}<p>${esc(letter.closing || "")}</p></div>`;
   }
 
   function reviewHtml(result) {
     const hasQuestions = Object.values(result.questions || {}).some(value => value?.length);
     return `<section class="doc-workflow" aria-labelledby="doc-review-title"><div data-doc-error aria-live="assertive"></div>
-      <h3 id="doc-review-title">Proposition adaptée</h3>
+      <div class="doc-heading"><h3 id="doc-review-title">Proposition adaptée</h3>
+        <button class="btn ghost sm" type="button" data-review-close title="La proposition ne sera plus proposée à la réouverture">Abandonner la proposition</button></div>
       ${(result.notes || []).length ? `<div class="doc-notes"><b>Contrôles appliqués</b><ul>${result.notes.map(note => `<li>${esc(note)}</li>`).join("")}</ul></div>` : ""}
       ${questionsHtml(result.questions)}
       <div class="doc-review-grid">${compositionHtml(result.composition)}${letterHtml(result.letter)}</div>
@@ -261,15 +263,22 @@
     const host = root();
     if (!host) return;
     if (!force && host.dataset.applicationId === String(application.id)
-        && ["loading", "true"].includes(host.dataset.loaded)) return;
+        && ["loading", "true", "preparing", "review", "failed"].includes(host.dataset.loaded)) return;
     host.dataset.applicationId = String(application.id);
     host.dataset.loaded = "loading";
     host.innerHTML = `<p class="doc-help" role="status">Chargement des documents…</p>`;
     try {
-      const [documents, templates, profile] = await Promise.all([
+      const [documents, templates, profile, preparation] = await Promise.all([
         api(`/api/applications/${application.id}/documents`), api("/api/templates"), api("/api/profile"),
+        api(`/api/applications/${application.id}/documents/preparation`),
       ]);
       state.templates = templates || [];
+      host._profile = profile;
+      const job = preparation?.job;
+      if (job && (["queued", "running"].includes(job.status) || !job.consumed_at_utc)) {
+        followPreparation(application, job);  // reprise : attente, revue ou erreur laissées à la fermeture
+        return;
+      }
       host.innerHTML = `<div data-doc-error aria-live="assertive"></div><div class="doc-toolbar"><div><h3>Documents</h3><p>${documents.length ? "Versions préparées pour cette candidature." : "Aucun CV ou lettre préparé."}</p></div>
         <button class="btn primary" data-start-documents>Préparer ma candidature</button></div>
         <div class="documents-list">${documents.length ? documents.map(documentHtml).join("") : `<div class="doc-empty">Le parcours conserve le modèle de ton CV par défaut et contrôle chaque fichier avant envoi.</div>`}</div>
@@ -288,6 +297,8 @@
     const host = root();
     if (!host) return;
     host.dataset.loaded = "false";
+    const { job } = await api(`/api/applications/${application.id}/documents/preparation`);
+    if (job && ["queued", "running"].includes(job.status)) { followPreparation(application, job); return; }
     let profile = host._profile;
     if (!profile) profile = await api("/api/profile");
     host.innerHTML = setupHtml(profile);
@@ -296,13 +307,83 @@
       event.preventDefault();
       let body;
       try { body = readSetup(form); } catch (error) { q("[data-doc-error]", host).innerHTML = errorBox(error.message); return; }
-      run(q('button[type="submit"]', form), "Préparation…", async () => {
-        state.preparation = await api(`/api/applications/${application.id}/documents/prepare`, { method: "POST", body });
-        host.innerHTML = reviewHtml(state.preparation);
-        bindReview(application);
+      run(q('button[type="submit"]', form), "Lancement…", async () => {
+        const job = await api(`/api/applications/${application.id}/documents/prepare`, { method: "POST", body });
+        followPreparation(application, job);
       }).catch(() => {});
     };
     q('input[name="kind"][value="cv"]', form)?.focus();
+  }
+
+  /* La préparation tourne côté serveur : la page ne fait que la suivre et peut être fermée à tout moment. */
+  const POLL_MS = 3000;
+  const preparationSteps = { prepare: "Rédaction par l'IA", render: "Création des fichiers", apply: "Mise en file de l'envoi" };
+
+  function pendingHtml(job) {
+    const step = preparationSteps[job.step] || (job.status === "queued" ? "En attente de son tour" : "Rédaction par l'IA");
+    return `<section class="doc-workflow doc-pending" aria-labelledby="doc-pending-title" aria-busy="true">
+      <h3 id="doc-pending-title">${job.origin === "auto" ? "Auto-candidature en cours" : "Préparation en cours"}</h3>
+      <p role="status"><span class="spinner dark" aria-hidden="true"></span> ${esc(step)}…</p>
+      <p class="doc-help">Tu peux fermer cette fenêtre : JobRadar continue la préparation et tu retrouveras le résultat ici.</p>
+    </section>`;
+  }
+
+  function failedHtml(job) {
+    return `<section class="doc-workflow" aria-labelledby="doc-failed-title"><h3 id="doc-failed-title">${job.origin === "auto" ? "Auto-candidature arrêtée" : "Préparation interrompue"}</h3>
+      ${errorBox(job.error || "Erreur inconnue.")}
+      <div class="doc-actions"><button class="btn primary" type="button" data-retry-preparation>Relancer une préparation</button>
+        <button class="btn ghost" type="button" data-close-preparation>Fermer</button></div></section>`;
+  }
+
+  async function consume(application) {
+    await api(`/api/applications/${application.id}/documents/preparation/consume`, { method: "POST" });
+    await renderDocumentsTab(application, [], true);
+  }
+
+  function showReview(application, result) {
+    const host = root();
+    state.preparation = result;
+    host.innerHTML = reviewHtml(result);
+    q("[data-review-close]", host)?.addEventListener("click", () => {
+      if (!window.confirm("Abandonner cette proposition ? Elle ne sera plus proposée à la réouverture.")) return;
+      consume(application).catch(error => toast(error.message, 5000));
+    });
+    bindReview(application);
+  }
+
+  function followPreparation(application, job) {
+    const host = root();
+    if (!host) return;
+    host.dataset.applicationId = String(application.id);
+    host.dataset.loaded = "preparing";
+    const showing = () => host.isConnected && host.dataset.applicationId === String(application.id)
+      && host.dataset.loaded === "preparing";
+    const display = current => {
+      if (current.status === "done" && current.origin === "manual" && current.result) {
+        host.dataset.loaded = "review";
+        showReview(application, current.result);
+      } else if (current.status === "done") {
+        consume(application).catch(() => {});
+      } else if (current.status === "failed") {
+        host.dataset.loaded = "failed";
+        host.innerHTML = failedHtml(current);
+        q("[data-retry-preparation]", host).onclick = () => prepare(application).catch(error => toast(error.message, 5000));
+        q("[data-close-preparation]", host).onclick = () => consume(application).catch(error => toast(error.message, 5000));
+      } else {
+        host.innerHTML = pendingHtml(current);
+        setTimeout(poll, POLL_MS);
+      }
+    };
+    const poll = async () => {
+      if (!showing()) return;  // fiche fermée ou autre candidature : le serveur continue seul
+      try {
+        const { job: current } = await api(`/api/applications/${application.id}/documents/preparation`);
+        if (showing() && current) display(current);
+      } catch (error) {
+        if (showing()) setTimeout(poll, POLL_MS * 2);
+      }
+    };
+    display(job);
   }
 
   function bindDocumentsTab(application) {

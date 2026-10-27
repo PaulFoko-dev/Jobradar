@@ -217,7 +217,7 @@ def test_capture_reussie_page_dorigine(client, monkeypatch, data_dir) -> None:
     # capture faite à part, dans un dossier temporaire du dossier offre/, supprimé ensuite
     assert call["dest_dir"].parent == (_root() / app["archive_dir"] / "offre").resolve()
     assert call["dest_dir"].name.startswith(".capture-") and not call["dest_dir"].exists()
-    assert call["browser_profile_dir"] == (data_dir / "navigateur").resolve()
+    assert call["browser_profile_dir"] == (data_dir / "navigateur-captures").resolve()
     assert call["offer"]["title"] == "Stage Analyste CERT"
     assert "copie de la page d'origine" in (_root() / app["archive_dir"] / "LISEZMOI.md").read_text(encoding="utf-8")
 
@@ -344,6 +344,30 @@ def test_recapture_aussi_fidele_remplace(client, monkeypatch) -> None:
     row = _recapture(client, monkeypatch, app["id"], fake_capture_module(level="page"))
     assert (row["capture_level"], row["capture_error"]) == ("page", None)
     assert pdf.read_bytes() == b"%PDF-1.4 faux"
+
+
+def test_copie_montrant_un_mur_remplacee_meme_par_une_copie_reconstituee(client, monkeypatch) -> None:
+    _use_capture(monkeypatch, fake_capture_module(level="page"))
+    app = _create(client)
+    pdf = _root() / app["archive_dir"] / "offre" / "offre.pdf"
+    pdf.write_bytes(b"%PDF-1.4 mur de connexion")
+    row = _recapture(client, monkeypatch, app["id"], fake_capture_module(level="reconstituee", error="Mur."))
+    assert (row["capture_level"], row["capture_error"]) == ("reconstituee", "Mur.")
+    assert pdf.read_bytes() == b"%PDF-1.4 faux"
+
+
+def test_copies_montrant_un_mur_relancees_au_demarrage(client, monkeypatch) -> None:
+    _use_capture(monkeypatch, fake_capture_module(level="page"))
+    walled, sound = _create(client), _create(client, title="Stage SOC")
+    (_root() / walled["archive_dir"] / "offre" / "offre.pdf").write_bytes(b"%PDF-1.4 mur de connexion")
+    archive.stop_queue()
+
+    assert archive.requeue_walls() == [walled["id"]]
+    assert db.archive_row(walled["id"])["capture_status"] == "pending"
+    assert db.archive_row(sound["id"])["capture_status"] == "done"
+    assert archive.run_pending_captures() == 1
+    assert (_root() / walled["archive_dir"] / "offre" / "offre.pdf").read_bytes() == b"%PDF-1.4 faux"
+    assert archive.requeue_walls() == []
 
 
 def test_capture_ignoree_si_la_candidature_est_retiree_entre_temps(data_dir, fake_capture) -> None:

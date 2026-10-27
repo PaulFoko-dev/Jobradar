@@ -2,7 +2,7 @@
 import base64
 import json
 
-from jobradar import ai, archive, db, profile, tailoring
+from jobradar import ai, archive, db, preparation, profile, tailoring
 
 
 def seed_profile():
@@ -331,6 +331,15 @@ def test_sent_requires_ready_and_sent_documents_are_frozen(client):
     assert ready_again.status_code == 409
 
 
+def prepare_in_background(client, application_id: int, body: dict) -> dict:
+    """Lance la préparation (réponse immédiate) puis relit la tâche une fois la file vide."""
+    started = client.post(f"/api/applications/{application_id}/documents/prepare", json=body)
+    assert started.status_code == 200, started.text
+    assert started.json()["status"] == "queued"
+    assert preparation._QUEUE is not None and preparation._QUEUE.wait_idle(30)
+    return client.get(f"/api/applications/{application_id}/documents/preparation").json()["job"]
+
+
 def test_prepare_and_answers_routes(client, monkeypatch):
     application = create_archived_application(client)
     response = client.post(f"/api/applications/{application['id']}/documents/prepare", json={"kinds": ["cv"]})
@@ -341,16 +350,15 @@ def test_prepare_and_answers_routes(client, monkeypatch):
                                                   "filename": "cv.txt", "format": "txt", "language": "fr"}]}
     profile.save_profile(data)
     monkeypatch.setattr(ai, "ask_ai", lambda *_a, **_k: (_ for _ in ()).throw(ai.QuotaError("Quota IA atteint")))
-    failed = client.post(f"/api/applications/{application['id']}/documents/prepare", json={"kinds": ["cv"]})
-    assert failed.status_code == 502 and "Quota" in failed.json()["detail"]
+    failed = prepare_in_background(client, application["id"], {"kinds": ["cv"]})
+    assert failed["status"] == "failed" and "Quota" in failed["error"]
 
     monkeypatch.setattr(ai, "ask_ai", lambda *_a, **_k: {
         "composition": {"headline": "Analyste SOC", "summary": "", "sections": composition()["sections"]},
         "letter": None, "questions": {"skills": [], "items": [], "missing": []}})
-    prepared = client.post(f"/api/applications/{application['id']}/documents/prepare",
-                           json={"kinds": ["cv"], "base_cv": "src-1"})
-    assert prepared.status_code == 200, prepared.text
-    body = prepared.json()
+    job = prepare_in_background(client, application["id"], {"kinds": ["cv"], "base_cv": "src-1"})
+    assert job["status"] == "done", job
+    body = job["result"]
     assert set(body) == {"session", "composition", "letter", "questions", "suggested_bases", "notes"}
 
     answered = client.post(f"/api/applications/{application['id']}/documents/answers",
@@ -370,8 +378,7 @@ def test_missing_answers_are_strict_memorized_and_removed_from_session(client, m
     monkeypatch.setattr(ai, "ask_ai", lambda *_a, **_k: {
         "composition": {"headline": "Analyste SOC", "summary": "", "sections": composition()["sections"]},
         "letter": None, "questions": {"skills": [], "items": [], "missing": ["Date de disponibilité"]}})
-    prepared = client.post(f"/api/applications/{application['id']}/documents/prepare",
-                           json={"kinds": ["cv"], "base_cv": "src-1"}).json()
+    prepared = prepare_in_background(client, application["id"], {"kinds": ["cv"], "base_cv": "src-1"})["result"]
 
     answered = client.post(f"/api/applications/{application['id']}/documents/answers", json={
         "session": prepared["session"],

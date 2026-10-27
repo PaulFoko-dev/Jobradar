@@ -52,6 +52,21 @@ def candidate_profile():
     return data
 
 
+def test_le_modele_word_de_lettre_prime_sur_une_ancienne_lettre_pdf(monkeypatch):
+    data = candidate_profile()
+    data["sources"][1].update({"name": "Lettre PDF proche", "format": "pdf", "keywords": ["SOC", "Splunk"]})
+    data["sources"].append({
+        "id": "src-3", "kind": "lettre", "name": "Lettre modele Word", "tags": [],
+        "filename": "lettre.docx", "format": "docx", "language": "fr",
+        "imported_at": "2026-01-02", "sha256": "y", "keywords": [],
+    })
+    monkeypatch.setattr(profile, "load_profile", lambda: data)
+
+    selected = tailoring._base_choice(data, OFFER, "lettre", None, "fr")
+
+    assert selected["id"] == "src-3"
+
+
 def valid_composition():
     return {
         "kind": "cv", "language": "fr", "base_source_id": "src-1",
@@ -358,6 +373,69 @@ def test_invalid_ai_letter_is_corrected_instead_of_silently_discarded(assistant,
     assert result["letter"] is not None
     assert len(calls) == 2 and "CORRECTION OBLIGATOIRE DE LA LETTRE" in calls[1]["prompt"]
     assert any("corrigée automatiquement" in note for note in result["notes"])
+
+
+def test_prompt_lists_offer_terms_absent_from_profile(assistant, application):
+    calls, replies = assistant
+    replies.append(tailored(letter=valid_letter()))
+    tailoring.prepare(application["id"], kinds=["cv", "lettre"])
+    assert "TERMES INTERDITS" in calls[0]["prompt"] and "« Sentinel »" in calls[0]["prompt"]
+    assert "« Splunk »" not in calls[0]["prompt"].split("TERMES INTERDITS")[1]
+
+
+def test_letter_still_citing_an_absent_term_loses_only_that_sentence(assistant, application):
+    calls, replies = assistant
+    citing = valid_letter() | {"paragraphs": ["Rejoindre votre équipe de 12 analystes me motive. Vos missions sur "
+                                              "Microsoft Sentinel m'intéressent.",
+                                              "Chez Acme, j'ai analysé 20 alertes avec Splunk."]}
+    replies += [tailored(letter=citing), tailored(composition=None, letter=citing)]
+
+    result = tailoring.prepare(application["id"], kinds=["cv", "lettre"])
+
+    assert "« Sentinel »" in calls[1]["prompt"].split("CORRECTION OBLIGATOIRE")[1]
+    assert result["letter"]["paragraphs"] == ["Rejoindre votre équipe de 12 analystes me motive.",
+                                              "Chez Acme, j'ai analysé 20 alertes avec Splunk."]
+    assert any("retirée" in note and "Sentinel" in note for note in result["notes"])
+
+
+def test_letter_is_refused_when_removing_sentences_would_empty_a_paragraph(assistant, application):
+    _calls, replies = assistant
+    citing = valid_letter() | {"paragraphs": ["Microsoft Sentinel me passionne.",
+                                              "Chez Acme, j'ai analysé 20 alertes avec Splunk."]}
+    replies += [tailored(letter=citing), tailored(composition=None, letter=citing)]
+    with pytest.raises(tailoring.CompositionError, match="reste invalide"):
+        tailoring.prepare(application["id"], kinds=["cv", "lettre"])
+
+
+def test_prepare_repairs_unknown_letter_fact_references_locally(assistant, application):
+    calls, replies = assistant
+    letter = valid_letter() | {"facts_refs": ["experience-1", "exp-inexistant"]}
+    # Le texte cite Acme : la réparation peut le relier sans demander à l'IA
+    # de reformuler une lettre qui ne contient aucune invention.
+    replies.append(tailored(letter=letter))
+
+    result = tailoring.prepare(application["id"], kinds=["cv", "lettre"])
+
+    assert result["letter"]["facts_refs"] == ["exp-1", "skill-1"]
+    assert len(calls) == 1
+    assert any("références internes" in note for note in result["notes"])
+
+
+def test_letter_recipient_targets_the_offer_company(assistant, application):
+    _calls, replies = assistant
+    replies.append(tailored(letter=valid_letter() | {"recipient": ["Ancienne Société", "69000 Lyon"]}))
+    result = tailoring.prepare(application["id"], kinds=["cv", "lettre"])
+    assert result["letter"]["recipient"] == ["Service recrutement", "CyberCo"]
+
+    replies.append(tailored(letter=valid_letter() | {"recipient": ["Direction de la sécurité", "CyberCo"]}))
+    result = tailoring.prepare(application["id"], kinds=["cv", "lettre"])
+    assert result["letter"]["recipient"] == ["Direction de la sécurité", "CyberCo"]
+
+
+def test_letter_validator_checks_recipient(saved_profile):
+    letter = valid_letter() | {"recipient": ["CyberCo", "Équipe Kubernetes"]}
+    with pytest.raises(tailoring.CompositionError, match="destinataire"):
+        tailoring.validate_letter(letter, saved_profile, OFFER["analysis"]["cv_keywords"], OFFER)
 
 
 def test_requested_letter_never_falls_back_to_cv_only(assistant, application):

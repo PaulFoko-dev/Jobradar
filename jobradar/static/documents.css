@@ -41,6 +41,7 @@
 .doc-preview { border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
 .doc-preview h4, .doc-preview h5 { margin: 0 0 9px; }
 .doc-preview ul { padding-left: 20px; }
+.doc-preview .doc-recipient { margin: 0 0 12px auto; width: fit-content; max-width: 60%; }
 .doc-workflow pre { max-height: 340px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .documents-list { display: grid; gap: 16px; margin-top: 16px; }
 .document-card > header { align-items: flex-start; }

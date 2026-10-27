@@ -142,7 +142,7 @@ def _sqlite_snapshot(database_path: Path, destination: Path) -> None:
 
 
 def _excluded_paths(data_dir: Path, database_path: Path, config_path: Path) -> tuple[Path, ...]:
-    paths = [data_dir / name for name in ("secrets.json", "navigateur", "sauvegardes", "claude_cwd")]
+    paths = [data_dir / name for name in ("secrets.json", "navigateur", "navigateur-systeme", "sauvegardes", "claude_cwd")]
     paths += [database_path, Path(str(database_path) + "-wal"), Path(str(database_path) + "-shm"), config_path]
     return tuple(path.resolve() for path in paths)
 

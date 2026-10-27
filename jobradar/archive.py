@@ -552,10 +552,35 @@ def run_capture(app_id: int) -> None:
 
 
 def _previous_rank(row: dict) -> int:
-    """Fidélité de la copie déjà présente dans ``offre/`` ; -1 s'il n'y en a pas."""
+    """Fidélité de la copie déjà présente dans ``offre/`` ; -1 s'il n'y en a pas ou si elle ne montre qu'un mur."""
     if not row["archive_dir"] or not (archive_root() / row["archive_dir"] / "offre" / "offre.pdf").is_file():
         return -1
+    if row["capture_level"] in ("page", "page_navigateur_dedie") and _shows_wall(row["archive_dir"]):
+        return -1
     return CAPTURE_RANK.get(row["capture_level"], -1)
+
+
+def _shows_wall(archive_dir: str) -> bool:
+    try:
+        pdf = (_child(archive_root(), archive_dir) / "offre" / "offre.pdf").read_bytes()
+        return _capture_module().pdf_shows_wall(pdf)
+    except (OSError, ImportError, AttributeError, UnsafePath):
+        return False
+
+
+def requeue_walls() -> list[int]:
+    """Copies « page d'origine » qui ne montrent qu'un mur de connexion : remises en attente de capture."""
+    requeued = []
+    for row in db.captured_pages():
+        if _shows_wall(row["archive_dir"]):
+            try:
+                db.request_capture(row["id"])
+            except (db.NotFound, db.Conflict):
+                continue
+            requeued.append(row["id"])
+    if requeued:
+        LOGGER.info("Captures montrant un mur de connexion relancées : %s", requeued)
+    return requeued
 
 
 def _kept(row: dict, fields: dict) -> dict:
@@ -582,7 +607,9 @@ def _capture(row: dict, previous: int) -> dict:
     except ImportError as exc:
         return _failed(f"Module de capture indisponible ({exc}).")
     snapshot = json.loads(row["offer_snapshot_json"] or "{}")
-    profile = config.browser_profile_dir().resolve()
+    # Une capture peut prendre du temps et enchaîner plusieurs offres : son profil
+    # distinct ne bloque jamais le navigateur visible des candidatures.
+    profile = config.capture_profile_dir().resolve()
     profile.mkdir(parents=True, exist_ok=True)
     offer_dir = (directory / "offre").resolve()
     # Capture à part (même système de fichiers) : offre.pdf et offre.png ne sont remplacés qu'à fidélité égale ou
@@ -662,6 +689,7 @@ def start_queue() -> CaptureQueue:
     global _QUEUE
     stop_queue()
     _QUEUE = CaptureQueue()
+    requeue_walls()
     _QUEUE.start()
     for app_id in catch_up():
         _QUEUE.submit(app_id)
@@ -701,6 +729,7 @@ def recapture(app_id: int) -> None:
 
 def run_pending_captures() -> int:
     """Pour ``cli refresh`` : traite ici les captures en attente (celles d'un serveur actif sont ignorées)."""
+    requeue_walls()
     pending = db.pending_captures()
     for app_id in pending:
         run_capture(app_id)
