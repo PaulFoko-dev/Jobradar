@@ -166,8 +166,10 @@ def already_sent(application_id: int) -> bool:
 def retry(attempt_id: int) -> dict:
     if already_sent(db.get_application_attempt(attempt_id)["application_id"]):
         raise db.Conflict("Cette candidature est déjà envoyée ou abandonnée : elle ne sera pas relancée.")
+    resume_url = (db.get_application_attempt(attempt_id).get("intervention") or {}).get("resume_url")
     attempt = db.transition_application_attempt(
-        attempt_id, expected={"needs_user", "failed"}, status="queued"
+        attempt_id, expected={"needs_user", "failed"}, status="queued",
+        intervention={"kind": "resume", "resume_url": resume_url} if resume_url else None,
     )
     from . import application_queue
     application_queue.wake()

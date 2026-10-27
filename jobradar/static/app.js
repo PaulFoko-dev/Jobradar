@@ -468,6 +468,10 @@ function autoApplyResult(job) {
   if (!attempt) return job.status === "failed" ? `Préparation arrêtée : ${reason}` : "Préparation en cours…";
   if (attempt.status === "submitted") return "Envoyée ✓";
   if (attempt.status === "needs_user") return `À finir toi-même : ${reason}`;
+  const waiting = job.supervision?.waiting;
+  if (attempt.status === "running" && waiting) {
+    return `⏳ À toi de jouer : ${waiting.message} (jusqu'à ${new Date(waiting.until).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })})`;
+  }
   if (["queued", "running"].includes(attempt.status)) return "En cours…";
   if (attempt.status === "manual_open") return "À finir toi-même : envoi manuel ouvert";
   return reason || attempt.status;
@@ -488,7 +492,7 @@ function autoApplyItem(job) {
     <span class="aa-result">${esc(autoApplyResult(job))}</span>
     ${job.supervision?.understanding ? `<span class="aa-ai">IA : ${esc(job.supervision.understanding)}</span>` : ""}
     <button class="link" type="button" data-aa-app="${esc(job.application_id)}">Voir la candidature</button>
-    ${job.resumable ? `<button class="link" type="button" data-aa-retry="${attempt.id}">Reprendre</button>` : ""}
+    ${job.resumable ? `<button class="link" type="button" data-aa-retry="${attempt.id}">${attempt.intervention?.kind === "waiting_user" ? "J'ai terminé, reprendre" : "Reprendre"}</button>` : ""}
     ${job.proofs?.["avant-envoi.png"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["avant-envoi.png"])}">Voir la capture</a>` : ""}
     ${job.proofs?.["confirmation.png"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["confirmation.png"])}">Confirmation</a>` : ""}
     ${job.proofs?.["journal.md"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["journal.md"])}">Journal</a>` : ""}</li>`;
@@ -2475,6 +2479,8 @@ function browserSettingsHtml() {
     <p class="muted small" id="bDetected"></p>
     <label>Exécutable (facultatif) <input id="bExecutable" placeholder="Détection automatique"></label>
     <label>Port CDP <input id="bPort" type="number" min="1024" max="65535"></label>
+    <label>Attente d'une étape à faire toi-même (minutes) <input id="bWait" type="number" min="1" max="60" step="1"
+      title="Connexion, création de compte, captcha : JobRadar attend ce délai et reprend seul dès que c'est fait, sinon il passe à la candidature suivante."></label>
     <button class="btn primary" id="bSave">Enregistrer</button>
     <button class="btn" id="bOpen" title="Ouvre le navigateur avec le profil réservé à JobRadar : connecte-toi une fois à tes comptes, il s'en souviendra.">Ouvrir le navigateur pour me connecter</button>
     <p class="muted small">Ton profil habituel ne peut pas être piloté (protection des navigateurs) : JobRadar utilise un profil à part. Connecte-toi une fois à tes comptes (Google, HelloWork, Workday, Welcome to the Jungle…) dans cette fenêtre. En terminal : <code>python -m jobradar.cli navigateur</code>.</p></fieldset>
@@ -2487,7 +2493,7 @@ function browserSettingsHtml() {
 
 async function loadBrowserSettings() {
   const s = await api("/api/settings/browser");
-  $("#bEngine").value = s.engine; $("#bExecutable").value = s.executable || ""; $("#bPort").value = s.cdp_port;
+  $("#bEngine").value = s.engine; $("#bExecutable").value = s.executable || ""; $("#bPort").value = s.cdp_port; $("#bWait").value = s.human_wait_minutes ?? 10;
   const found = s.system_browser, standard = s.default_browser;
   $("#bDetected").textContent = !found ? "Aucun navigateur compatible trouvé : JobRadar utilisera son Chromium intégré."
     : found.is_default ? `Navigateur utilisé : ${found.name} (ton navigateur par défaut).`
@@ -2496,7 +2502,7 @@ async function loadBrowserSettings() {
   const render = accounts => { $("#lAccounts").innerHTML = accounts.map(a => `<li class="file"><span>${esc(a.domain)} — ${esc(a.username)}</span><button class="btn sm ghost" data-domain="${esc(a.domain)}">Supprimer</button></li>`).join("") || `<li class="muted small">Aucun identifiant.</li>`;
     $$("#lAccounts [data-domain]").forEach(b => b.onclick = async () => { await api(`/api/settings/logins/${encodeURIComponent(b.dataset.domain)}`, {method:"DELETE"}); loadBrowserSettings(); }); };
   render(s.accounts);
-  $("#bSave").onclick = async () => { await api("/api/settings/browser", {method:"PUT", body:{engine:$("#bEngine").value, executable:$("#bExecutable").value, cdp_port:Number($("#bPort").value)}}); toast("Navigateur enregistré"); };
+  $("#bSave").onclick = async () => { await api("/api/settings/browser", {method:"PUT", body:{engine:$("#bEngine").value, executable:$("#bExecutable").value, cdp_port:Number($("#bPort").value), human_wait_minutes:Number($("#bWait").value)}}); toast("Navigateur enregistré"); };
   $("#bOpen").onclick = async () => {
     const b = $("#bOpen"); b.disabled = true;
     try { const r = await api("/api/settings/browser/open", {method:"POST"}); toast(`${r.name} ouvert : connecte-toi à tes comptes.`); }

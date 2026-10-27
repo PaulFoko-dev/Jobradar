@@ -81,7 +81,7 @@ DEFAULT_CONFIG = {
         "kinds": ["high_score_offer", "follow_up_due", "interview_reminder"],
     },
     "browser": {"engine": "system", "executable": "", "cdp_port": 9333, "keep_open": True,
-                "ai_supervision": "always"},
+                "ai_supervision": "always", "human_wait_minutes": 10},
     # Nombre d'offres envoyées à Claude par appel, et appels en parallèle.
     "scoring_batch_size": 4,
     "scoring_parallel": 3,
@@ -168,8 +168,12 @@ def browser_settings(cfg: dict | None = None) -> dict:
     keep_open = raw.get("keep_open", True)
     # always : l'IA supervise chaque étape ; fallback : seulement si les heuristiques échouent ; off : jamais.
     supervision = raw.get("ai_supervision") if raw.get("ai_supervision") in {"always", "fallback", "off"} else "always"
+    # Attente d'une étape humaine (connexion, création de compte…) avant de passer à la candidature suivante.
+    wait = raw.get("human_wait_minutes", 10)
+    wait = wait if isinstance(wait, int) and not isinstance(wait, bool) and 1 <= wait <= 60 else 10
     return {"engine": engine, "executable": executable, "cdp_port": port,
-            "keep_open": keep_open if isinstance(keep_open, bool) else True, "ai_supervision": supervision}
+            "keep_open": keep_open if isinstance(keep_open, bool) else True, "ai_supervision": supervision,
+            "human_wait_minutes": wait}
 
 
 # Navigateurs pilotables (Chromium) : nom affiché, mots qui les reconnaissent comme navigateur par défaut,
@@ -264,7 +268,7 @@ def default_browser_name() -> str | None:
 
 
 def save_browser_settings(value: dict) -> dict:
-    unknown = set(value) - {"engine", "executable", "cdp_port", "keep_open", "ai_supervision"}
+    unknown = set(value) - {"engine", "executable", "cdp_port", "keep_open", "ai_supervision", "human_wait_minutes"}
     if unknown:
         raise ValueError("Réglage navigateur inconnu.")
     merged = browser_settings() | value

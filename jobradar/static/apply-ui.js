@@ -49,7 +49,7 @@
     }
     return `${["queued", "needs_user", "failed"].includes(attempt.status) && !clicked ? `<button class="btn sm ghost" type="button" data-cancel-attempt="${attempt.id}">Annuler</button>` : ""}
       ${!clicked && (attempt.status === "failed" || (attempt.status === "needs_user" && !["missing_fields", "review_required"].includes(attempt.intervention?.kind)))
-        ? `<button class="btn sm" type="button" data-retry-attempt="${attempt.id}">${attempt.status === "failed" ? "Réessayer" : "Reprendre"}</button>` : ""}
+        ? `<button class="btn sm" type="button" data-retry-attempt="${attempt.id}">${attempt.status === "failed" ? "Réessayer" : attempt.intervention?.kind === "waiting_user" ? "J'ai terminé, reprendre" : "Reprendre"}</button>` : ""}
       ${attempt.intervention?.action === "manual_fallback" || attempt.status === "failed"
         ? `<button class="btn sm primary" type="button" data-manual-attempt="${attempt.id}">Passer en manuel</button>` : ""}`;
   }

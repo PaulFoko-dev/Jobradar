@@ -486,6 +486,21 @@ class Journal:
     def note(self, text: str) -> None:
         self._append(f"- {time.strftime('%H:%M:%S')} — {text}\n")
 
+    def waiting(self, message: str | None, until: float | None = None) -> None:
+        """Attente d'une action de l'utilisateur, affichée dans le panneau (``None`` : attente terminée)."""
+        path = self.directory / "supervision.json"
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        if state.get("attempt_id") != self.attempt_id:
+            state = {"attempt_id": self.attempt_id}
+        state["waiting"] = ({"message": message, "until": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(until))}
+                            if message else None)
+        profile.atomic_write(path, json.dumps(state, ensure_ascii=False).encode())
+        if message:
+            self.note(f"En attente de toi : {message}")
+
     def decision(self, page, snap: dict, decision: dict, executed: list[str]) -> None:
         self.step += 1
         lines = [f"\n### Étape {self.step} — {time.strftime('%H:%M:%S')}", f"- Page : {snap['url']}",

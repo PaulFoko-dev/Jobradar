@@ -174,7 +174,7 @@ def _recent_item(raw: dict) -> dict:
     try:
         supervision = json.loads((proof / "supervision.json").read_text(encoding="utf-8"))
         if attempt and supervision.get("attempt_id") == attempt["id"]:
-            item["supervision"] = {key: supervision.get(key) for key in ("page_kind", "understanding", "at")}
+            item["supervision"] = {key: supervision.get(key) for key in ("page_kind", "understanding", "at", "waiting")}
     except (OSError, ValueError):
         pass
     return item

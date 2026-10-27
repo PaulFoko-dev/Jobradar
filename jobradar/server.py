@@ -1101,6 +1101,7 @@ class BrowserSettingsIn(BaseModel):
     cdp_port: StrictInt = Field(9333, ge=1024, le=65535)
     keep_open: StrictBool | None = None
     ai_supervision: Literal["always", "fallback", "off"] | None = None
+    human_wait_minutes: StrictInt | None = Field(None, ge=1, le=60)
 
 
 class LoginIn(BaseModel):

@@ -275,19 +275,130 @@ def _try_login(page) -> bool:
     return not _blocked(page, page.locator("body").inner_text(timeout=5000).casefold())
 
 
-def _wait_for_human(page, attempt: dict, timeout_ms: int = 300_000) -> bool:
-    """Laisse la fenêtre ouverte pour connexion/captcha et reprend dès que le blocage disparaît."""
-    intervention = {"kind": "authentication_or_captcha",
-                    "message": "Interviens dans la fenêtre du navigateur ; JobRadar reprendra automatiquement.",
-                    "action": "open_browser"}
-    notifications.application_intervention(attempt, intervention)
-    deadline = time.monotonic() + timeout_ms / 1000
-    while time.monotonic() < deadline:
-        page.wait_for_timeout(1_000)
-        visible = page.locator("body").inner_text(timeout=5000).casefold()
-        if not _blocked(page, visible):
-            return True
-    return False
+HUMAN_STEP_KINDS = {"login", "account_creation", "captcha"}
+HUMAN_STEP_MESSAGES = {
+    "login": "connecte-toi dans la fenêtre du navigateur",
+    "account_creation": "crée ton compte dans la fenêtre du navigateur (et valide l'e-mail de confirmation si besoin)",
+    "captcha": "résous la vérification dans la fenêtre du navigateur",
+}
+
+
+SIGNUP_WORDS = ("creer un compte", "creer mon compte", "create account", "create an account", "sign up",
+                "inscription", "s inscrire", "register")
+
+
+def _human_step_kind(page, visible: str) -> str:
+    """Type d'étape humaine reconnu par les règles, pour un message précis à l'utilisateur."""
+    if any(page.locator(selector).count() for selector in BLOCK_SELECTORS[1:]) or "captcha" in visible:
+        return "captcha"
+    folded = application_adapters._fold(visible)
+    return "account_creation" if any(word in folded for word in SIGNUP_WORDS) else "login"
+
+
+def _base_domain(url: str) -> str:
+    host = (urlsplit(url).hostname or "").removeprefix("www.")
+    return ".".join(host.split(".")[-2:])
+
+
+def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
+    """Étape humaine (connexion, compte, captcha, code e-mail) : JobRadar surveille et reprend seul.
+
+    Renvoie (issue, page) : « ready » (la candidature est de nouveau accessible, éventuellement dans
+    un nouvel onglet), « confirmed » (tu as terminé l'envoi toi-même), « closed » (onglet fermé) ou
+    « timeout » (rien de concluant dans le délai : la candidature est mise de côté, onglet ouvert).
+    """
+    minutes = config.browser_settings()["human_wait_minutes"]
+    deadline = time.monotonic() + minutes * 60
+    message = (f"{HUMAN_STEP_MESSAGES.get(kind, HUMAN_STEP_MESSAGES['login'])[:1].upper()}"
+               f"{HUMAN_STEP_MESSAGES.get(kind, HUMAN_STEP_MESSAGES['login'])[1:]} : JobRadar reprend tout seul "
+               f"dès que c'est fait (attente jusqu'à {minutes} min).")
+    notifications.application_intervention(attempt, {"kind": "waiting_user", "message": message,
+                                                     "action": "open_browser"})
+    supervision.journal.waiting(message, time.time() + minutes * 60)
+    context = page.context
+    domains = {_base_domain(page.url), _base_domain(attempt["target_url"])}
+    known = {tab for tab in context.pages if tab is not page}  # onglets à toi (messagerie…) : ignorés
+    seen: dict = {}  # onglet -> [empreinte de départ, dernière empreinte, relevés stables]
+    try:
+        while time.monotonic() < deadline:
+            tabs = [tab for tab in context.pages if not tab.is_closed() and tab not in known]
+            # Nouvel onglet du même site (lien de validation, connexion unique…) : suivi aussi.
+            tabs = [tab for tab in tabs if tab is page or _base_domain(tab.url) in domains]
+            if not tabs:
+                return "closed", page
+            tabs[-1].wait_for_timeout(2_000)
+            for tab in reversed(tabs):
+                if tab.is_closed():
+                    continue
+                try:
+                    return "ready", _ready_tab(tab, provider)
+                except (application_adapters.NotApplicationForm, ValueError, PlaywrightError):
+                    pass
+                try:
+                    current = application_supervisor.snapshot(tab)["hash"]
+                    visible = tab.locator("body").inner_text(timeout=5000).casefold()
+                except PlaywrightError:
+                    continue
+                state = seen.setdefault(tab, [current, current, 0])
+                state[2] = state[2] + 1 if current == state[1] else 0
+                state[1] = current
+                # Page changée puis stable 4 s, sans mur de connexion visible : on regarde où on en est.
+                if current == state[0] or state[2] < 2 or _blocked(tab, visible):
+                    continue
+                verdict = _classify_after_wait(tab, supervision, kind)
+                if verdict in HUMAN_STEP_KINDS:
+                    state[0] = current  # étape suivante de l'inscription : on continue d'attendre
+                    continue
+                return verdict, tab
+        return "timeout", page
+    finally:
+        supervision.journal.waiting(None)
+
+
+def _ready_tab(tab, provider: str):
+    _live_form(tab, provider)
+    return tab
+
+
+def _classify_after_wait(tab, supervision, kind: str) -> str:
+    """« ready », « confirmed » ou un type d'étape humaine encore en cours."""
+    snap, decision = supervision.decide(tab, hints={"attente_utilisateur_terminee": kind})
+    if decision is None:
+        return "ready"  # sans IA, la disparition du mur de connexion suffit
+    if decision["page_kind"] == "confirmation":
+        return "confirmed"
+    return decision["page_kind"] if decision["page_kind"] in HUMAN_STEP_KINDS else "ready"
+
+
+def _after_human_step(attempt: dict, outcome: str, page, decision: dict | None = None) -> None:
+    """Pose l'intervention correspondant à une attente qui n'a pas abouti à la reprise."""
+    if outcome == "confirmed":
+        _ai_intervention(attempt, "already_confirmed", decision,
+                         "La page affiche une confirmation : tu as sans doute terminé l'envoi toi-même. "
+                         "Marque la candidature « envoyée » dans le suivi.", action="verify")
+        return
+    resume_url = None if page.is_closed() else page.url
+    message = ("L'onglet a été fermé avant la fin de l'étape. Une fois ton compte prêt, clique « Reprendre »."
+               if outcome == "closed" else
+               "Étape pas encore terminée (connexion, création de compte ou vérification). L'onglet reste ouvert : "
+               "finis-la puis clique « Reprendre », JobRadar repartira de là.")
+    _ai_intervention(attempt, "waiting_user", decision, message, action="resume", resume_url=resume_url)
+
+
+def _resume_page(context, attempt: dict):
+    """Onglet laissé ouvert lors d'une attente : la reprise continue là où tu t'es arrêté."""
+    url = (attempt.get("intervention") or {}).get("resume_url")
+    if not url:
+        return None
+    origin = urlsplit(url)[:2]
+    for tab in reversed(context.pages):
+        try:
+            if not tab.is_closed() and urlsplit(tab.url)[:2] == origin:
+                tab.bring_to_front()
+                return tab
+        except PlaywrightError:
+            continue
+    return None
 
 
 def _proof_directory(attempt: dict) -> Path:
@@ -702,12 +813,12 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
                 login_attempted = True
                 if _try_login(page):
                     continue
-            if _wait_for_change(page, attempt, snap["hash"]):
+            outcome, page = _wait_for_user(page, attempt, provider, supervision, kind)
+            if outcome == "ready":
+                supervision.journal.note("Étape terminée de ton côté : reprise automatique.")
                 supervision.last_hash = None
                 continue
-            _ai_intervention(attempt, "authentication_or_captcha", decision,
-                             "Le délai d'intervention est dépassé. Reprends la session quand tu es disponible.",
-                             action="open_browser")
+            _after_human_step(attempt, outcome, page, decision)
             return None
         clicks = [item for item in decision["actions"]
                   if item["type"] == "click" and item["purpose"] in application_supervisor.NAVIGATION_PURPOSES]
@@ -749,24 +860,6 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
                   "L'IA n'a pas atteint de formulaire dans la limite de douze étapes. Rien n'a été envoyé.",
                   action="manual_fallback")
     return None
-
-
-def _wait_for_change(page, attempt: dict, initial_hash: str, timeout_ms: int = 300_000) -> bool:
-    """Connexion ou captcha : laisse la main à l'utilisateur et reprend dès que la page change."""
-    notifications.application_intervention(attempt, {
-        "kind": "authentication_or_captcha",
-        "message": "Interviens dans la fenêtre du navigateur ; JobRadar reprendra automatiquement.",
-        "action": "open_browser"})
-    deadline = time.monotonic() + timeout_ms / 1000
-    while time.monotonic() < deadline:
-        page.wait_for_timeout(2_000)
-        try:
-            if application_supervisor.snapshot(page)["hash"] != initial_hash:
-                page.wait_for_timeout(1_500)
-                return True
-        except PlaywrightError:
-            continue
-    return False
 
 
 def _continued_form(page, provider: str):
@@ -900,10 +993,14 @@ def _final_review(plan: dict, supervision: _Supervision) -> list[str]:
 
 def _run_session(context, attempt: dict, provider: str, candidate: dict, files: dict, approved: bool) -> str | None:
     """Parcourt le formulaire ; renvoie « submitted » si l'envoi est confirmé, sinon une intervention est posée."""
-    page = context.new_page()
-    page.goto(attempt["target_url"], wait_until="domcontentloaded", timeout=45_000)
+    page = _resume_page(context, attempt)
+    resumed = page is not None
+    if not resumed:
+        page = context.new_page()
+        page.goto(attempt["target_url"], wait_until="domcontentloaded", timeout=45_000)
     supervision = _Supervision(attempt, candidate, files)
-    supervision.journal.note(f"Ouverture de {attempt['target_url']} (supervision IA : {supervision.mode})")
+    supervision.journal.note(f"{'Reprise dans l’onglet laissé ouvert' if resumed else 'Ouverture'} de {page.url} "
+                             f"(supervision IA : {supervision.mode})")
     collected: dict[str, dict] = {}
     final_submit = None
     login_attempted = False
@@ -916,11 +1013,12 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
             if not login_attempted:
                 login_attempted = True
                 logged_in = _try_login(page)
-            if not logged_in and not _wait_for_human(page, attempt):
-                _intervention(attempt["id"], "authentication_or_captcha",
-                              "Le délai d'intervention est dépassé. Reprends la session quand tu es disponible.",
-                              action="open_browser")
-                return None
+            if not logged_in:
+                outcome, page = _wait_for_user(page, attempt, provider, supervision, _human_step_kind(page, visible))
+                if outcome != "ready":
+                    _after_human_step(attempt, outcome, page)
+                    return None
+                supervision.journal.note("Étape terminée de ton côté : reprise automatique.")
         located = _locate(page, attempt, provider, step, supervision)
         if located is None:
             return None

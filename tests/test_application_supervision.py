@@ -261,6 +261,16 @@ show(0);
 CLOSED = """<!doctype html><html lang="fr"><body><main><h1>Stage SOC</h1>
 <p>Cette offre n'est plus disponible.</p><a href="/">Retour aux offres</a></main></body></html>"""
 
+# Création de compte : au bout de 2 s, « l'utilisateur » a fini et le site affiche la candidature.
+ACCOUNT = """<!doctype html><html lang="fr"><body><main id="page"><h1>Créer un compte</h1>
+<form><label for="mail">E-mail</label><input id="mail" type="email"><label for="pw">Mot de passe</label>
+<input id="pw" type="password"><button type="button">Créer mon compte</button></form></main>
+<script>setTimeout(() => { document.getElementById('page').innerHTML = `<h1>Candidature</h1>
+<form action="/envoi" method="post" enctype="multipart/form-data">
+<label for="email">E-mail *</label><input id="email" name="email" type="email" required>
+<label for="resume">CV *</label><input id="resume" name="resume" type="file" required>
+<button type="submit">Envoyer ma candidature</button></form>`; }, 2000);</script></body></html>"""
+
 STUCK = """<!doctype html><html lang="fr"><body><main><h1>Stage SOC</h1>
 <button type="button">Je suis intéressé(e)</button></main></body></html>"""
 
@@ -269,7 +279,8 @@ class _Site(http.server.BaseHTTPRequestHandler):
     posts: list[tuple[str, bytes]] = []
 
     def do_GET(self) -> None:  # noqa: N802 - API de http.server
-        pages = {"/interesse": INTERESTED, "/etapes": MULTI_STEP, "/cloturee": CLOSED, "/bloquee": STUCK,
+        pages = {"/interesse": INTERESTED, "/etapes": MULTI_STEP, "/cloturee": CLOSED, "/bloquee": STUCK, "/compte": ACCOUNT,
+                 "/compte-en-cours": ACCOUNT.split("<script>")[0] + "</body></html>",
                  "/merci": "<html><body><h1>Merci pour votre candidature</h1></body></html>"}
         body = pages.get(self.path)
         self.send_response(200 if body else 404)
@@ -327,7 +338,9 @@ def supervised_browser(monkeypatch, tmp_path: Path):
                         lambda page, provider, timeout_ms=2_000: wait(page, provider, min(timeout_ms, 2_000)))
     monkeypatch.setattr(application_browser, "sync_playwright", headless)
     monkeypatch.setattr(application_browser.config, "browser_settings", lambda: {
-        "engine": "chromium", "executable": "", "cdp_port": 9333, "keep_open": False, "ai_supervision": "always"})
+        "engine": "chromium", "executable": "", "cdp_port": 9333, "keep_open": False, "ai_supervision": "always",
+        "human_wait_minutes": 1})
+    monkeypatch.setattr(application_browser.login_credentials, "for_host", lambda _host: None)
     monkeypatch.setattr(application_supervisor, "mode", lambda: "always")
     monkeypatch.setattr(application_browser, "_headed_available", lambda: True)
     monkeypatch.setattr(application_browser, "_selected_files", lambda _attempt: {"cv": str(cv)})
@@ -351,6 +364,8 @@ def _scripted_ai(monkeypatch) -> list[dict]:
             return _decision(page_kind="closed_offer")
         if "Merci pour votre candidature" in snap["text"]:
             return _decision(page_kind="confirmation")
+        if any(element["type"] == "password" for element in snap["elements"]):
+            return _decision(page_kind="account_creation")
         actions = []
         for element in snap["elements"]:
             text, label = element["text"].casefold(), element["label"].casefold()
@@ -456,3 +471,51 @@ def test_unavailable_ai_falls_back_to_the_rules_without_blocking(client, site, s
     assert saved["status"] == "needs_user" and saved["intervention"]["kind"] == "not_application_form"
     assert _Site.posts == []
     assert "IA indisponible, repli sur les règles automatiques" in _journal(attempt)
+
+
+def test_robot_resumes_by_itself_once_the_account_is_created(client, site, supervised_browser, monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/compte")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "submitted", saved
+    journal = _journal(attempt)
+    assert "En attente de toi : Crée ton compte" in journal and "reprise automatique" in journal
+
+
+def test_unfinished_account_creation_is_parked_and_resumed_from_its_tab(client, site, supervised_browser,
+                                                                         monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    settings = application_browser.config.browser_settings()
+    monkeypatch.setattr(application_browser.config, "browser_settings", lambda: settings | {"human_wait_minutes": 0})
+    attempt = _claimed_attempt(client, f"{site}/compte-en-cours")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "needs_user" and saved["intervention"]["kind"] == "waiting_user"
+    assert saved["intervention"]["action"] == "resume"
+    assert saved["intervention"]["resume_url"] == f"{site}/compte-en-cours"
+    assert not _Site.posts
+
+    from jobradar import application_flow, application_queue
+    monkeypatch.setattr(application_queue, "wake", lambda: None)
+    queued = application_flow.retry(attempt["id"])
+    assert queued["intervention"] == {"kind": "resume", "resume_url": f"{site}/compte-en-cours"}
+
+    class Tab:
+        def __init__(self, url):
+            self.url, self.front = url, False
+
+        def is_closed(self):
+            return False
+
+        def bring_to_front(self):
+            self.front = True
+
+    mine, other = Tab(f"{site}/compte-en-cours?etape=2"), Tab("https://mail.example.test/inbox")
+    context = type("Context", (), {"pages": [mine, other]})()
+    assert application_browser._resume_page(context, queued) is mine and mine.front
+    assert application_browser._resume_page(context, {"intervention": None}) is None
