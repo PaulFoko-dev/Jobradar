@@ -47,6 +47,7 @@ ton abonnement. Pas de clé API, pas de serveur distant : tes recherches et tes 
 | 📊 **Score de pertinence expliqué** | Points forts et points faibles, résumé, missions, profil, points d'attention |
 | 📝 **Aide au CV** | Mots-clés exacts de l'offre à reprendre (copiables) et conseils d'adaptation |
 | 🚀 **Candidature contrôlée** | Choix des CV et lettres, amélioration d'une version par consigne libre avec nouvel aperçu, panneau manuel ou remplissage assisté sur Greenhouse, Lever, SmartRecruiters, Workday et formulaires génériques ; LinkedIn et Indeed restent manuels |
+| 🤖 **Auto-candidature (optionnelle)** | Par recherche : au-dessus d'un score choisi, CV et lettre préparés, contrôlés (ATS ≥ 95 %) puis envoyés automatiquement, avec un plafond quotidien ; Indeed et LinkedIn en préparation seule |
 | 📍 **Zone stricte ou souple** | En mode souple, une offre hors zone reste visible si son score est élevé |
 | 🗂️ **Suivi des candidatures** | Kanban par glisser-déposer, vue liste, notes, historique daté, taux de réponse |
 | 🔁 **Confirmation automatique** | Quand tu reviens sur JobRadar après avoir ouvert une offre, il te demande si tu as postulé |
@@ -157,6 +158,41 @@ dans `"models"` ; une chaîne vide utilise le modèle par défaut de l'assistant
 
 > 💡 Le filtre « Score ≥ 40 » masque par défaut les offres peu pertinentes et celles pas encore analysées.
 > Mets-le à 0 pour tout voir.
+
+### Préparation en arrière-plan et auto-candidature
+
+La préparation du CV et de la lettre tourne sur le serveur : tu peux fermer la fenêtre, le résultat t'attend à la
+réouverture de la candidature (onglet Documents). Une préparation interrompue par un arrêt de JobRadar repart au
+démarrage suivant.
+
+Sur la page d'une recherche, l'interrupteur **Auto-candidature** (désactivé par défaut, confirmation demandée) confie
+à JobRadar chaque offre notée au-dessus du **score minimal** choisi, dans la limite d'un **plafond quotidien** :
+
+1. l'offre est ajoutée au suivi, puis CV et lettre sont préparés avec tes bases et modèles par défaut, sans question ;
+2. les documents sont générés ; la chaîne s'arrête si le contrôle ATS est sous 95 % ou si un document est périmé ;
+3. la candidature part en **envoi assisté sans relecture** (ta préférence de relecture habituelle n'est pas modifiée).
+   Pour Indeed, LinkedIn et les formulaires non pris en charge, JobRadar s'arrête aux documents prêts et te prévient.
+
+Les champs de motivation et les questions factuelles peuvent être complétés par l'IA uniquement à partir du profil ;
+au moindre doute ou fait non justifié, JobRadar s'arrête avant l'envoi. Dans **Réglages → Candidatures**, le mode
+**Navigateur du système** (par défaut) utilise ton navigateur par défaut s'il est basé sur Chromium (Chrome, Edge,
+Brave, Vivaldi, Opera) ; avec Firefox ou Safari, qui ne peuvent pas être pilotés, il prend un Chrome ou un Edge
+installé, sinon le Chromium intégré. Les navigateurs refusent d'être pilotés sur ton profil habituel : JobRadar ouvre
+donc un profil à part, conservé d'une fois sur l'autre (`data/navigateur-systeme/`). Connecte-toi une première fois à
+tes comptes avec le bouton **Ouvrir le navigateur pour me connecter** de cette section, ou :
+
+```bash
+python -m jobradar.cli navigateur
+```
+
+Des identifiants par domaine peuvent aussi être enregistrés dans cette section. Un identifiant n'est rempli que sur
+le domaine enregistré ou l'un de ses sous-domaines : enregistré pour `acme.wd3.myworkdayjobs.com`, il n'est jamais
+proposé à un autre client Workday. Les mots de passe restent dans le trousseau système (ou dans `data/secrets.json` protégé en 0600) et ne sont jamais affichés. Les captchas ne sont pas
+contournés. Toute difficulté (IA, validation, formulaire ambigu) arrête la chaîne et crée une notification. Une panne
+du navigateur avant le clic d'envoi donne lieu à une unique reprise différée ; après le clic, aucune reprise automatique
+n'est possible afin d'éviter un doublon. Une offre n'est jamais confiée deux fois. Avec la mise à jour
+quotidienne sans serveur démarré, les documents sont préparés pendant `refresh` et l'envoi part au prochain
+démarrage du serveur.
 
 ## ⏰ Mise à jour automatique quotidienne
 
@@ -331,7 +367,7 @@ Le plan détaillé est dans [docs/etude-faisabilite-cv-lettre.md](docs/etude-fai
 - [x] **Étape 1** : dates limites et priorité, règles par entreprise, alertes, relances guidées, entretiens dans l'agenda, qualité du dépôt
 - [x] **Étape 2** : archivage local de chaque candidature (copie PDF et capture de l'offre), sauvegarde et export
 - [x] **Étape 3** : profil candidat, CV et lettre adaptés à chaque offre, contrôle ATS
-- [ ] **Étape 4** : préparation et simulation d'entretien, statistiques de candidature
+- [x] **Étape 4** : préparation et simulation d'entretien, contacts, compétences demandées et statistiques de candidature
 - [x] **Étape 5** : candidature manuelle ou assistée par IA — Greenhouse, Lever, SmartRecruiters, Workday et formulaires génériques ; reprise humaine sûre, preuves et repli manuel
 - [x] **Étape 6** : conservation du DOCX d’origine, reproduction ATS approchée du style d’un PDF Canva/Figma et modèle LaTeX ATS sécurisé avec repli automatique
 - [ ] **Étape 7** : installateur, interface en anglais, clé API IA externe en option

@@ -187,6 +187,17 @@ def _notify(analyzed: list[dict], send_email: bool = True):
         _log(f"Notifications : échec {type(e).__name__}: {e}")
 
 
+def _auto_apply(search_id: int) -> None:
+    """Auto-candidature de fin d'exécution ; un échec ici ne compromet jamais la recherche."""
+    try:
+        from . import preparation
+        scheduled = preparation.schedule(search_id)
+        if scheduled:
+            _log(f"Auto-candidature : {len(scheduled)} offre(s) confiée(s) à la préparation automatique")
+    except Exception as e:
+        _log(f"Auto-candidature : échec {type(e).__name__}: {e}")
+
+
 def run_search(search_id: int, score_only: bool = False, *, send_email: bool = True) -> dict:
     """Exécute une recherche complète. Une seule exécution à la fois.
 
@@ -213,6 +224,7 @@ def run_search(search_id: int, score_only: bool = False, *, send_email: bool = T
 
         db.mark_search_run(search_id)
         _notify(analyzed, send_email)
+        _auto_apply(search_id)
         _log(f"Terminé : {stats['new']} nouvelles offres, {stats['scored']} analysées, "
              f"{stats['pending']} en attente d'analyse")
         _set(phase="done", message="Terminé", progress=1.0)

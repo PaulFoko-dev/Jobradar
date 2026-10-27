@@ -32,6 +32,10 @@
       <span><svg viewBox="0 0 24 24" class="ic stroke"><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg> Mes candidatures</span>
       <span class="count" id="trackerCount">0</span>
     </button>
+    <button class="search-item nav-auto" id="autoApplyNav">
+      <span><svg viewBox="0 0 24 24" class="ic stroke"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg> Candidatures auto</span>
+      <span class="count" id="autoApplyCount" hidden>0</span>
+    </button>
     <button class="search-item nav-profile" id="profileNav">
       <span>Mon profil</span>
     </button>
@@ -167,6 +171,11 @@
         </div>
       </header>
 
+      <div id="autoApply" class="auto-apply-bar">
+        <span id="aaBarText" role="status" aria-live="polite">Auto-candidature désactivée</span>
+        <button class="btn sm ghost" id="aaManage" type="button">Gérer l'auto-candidature →</button>
+      </div>
+
       <div id="progress" class="progress-card" hidden>
         <div class="progress-top"><span id="progressMsg"></span><button class="link" id="logToggle">journal</button></div>
         <div class="bar"><div id="progressBar"></div></div>
@@ -174,25 +183,32 @@
       </div>
 
       <div class="filters">
-        <input id="qText" type="search" aria-label="Filtrer les offres" placeholder="Filtrer (intitulé, entreprise, ville…)">
-        <div class="filter-group">
-          <span>Zone</span>
-          <div class="segmented sm" id="qZone"><button data-v="strict">Stricte</button><button data-v="flex">Souple</button></div>
-          <label class="inline" id="qZoneThrWrap" title="En mode souple, les offres hors zone ne s'affichent qu'au-dessus de ce score">
-            hors zone si ≥ <input id="qZoneThr" type="number" min="0" max="100" step="5">
+        <div class="filters-row">
+          <input id="qText" type="search" aria-label="Filtrer les offres" placeholder="Filtrer (intitulé, entreprise, ville…)">
+          <select id="qStatus" aria-label="Statut des offres">
+            <option value="active">À traiter</option><option value="fav">Favoris</option>
+            <option value="applied">Dans le suivi</option><option value="ignored">Masquées</option><option value="all">Toutes</option>
+            <option value="excluded">Entreprises exclues</option>
+          </select>
+          <select id="qSource" aria-label="Source"><option value="">Toutes les sources</option></select>
+          <select id="qSort" aria-label="Trier par"><option value="priority">À faire en priorité</option><option value="score">Pertinence</option><option value="date">Plus récentes</option></select>
+        </div>
+        <div class="filters-row filters-refine">
+          <div class="filter-group">
+            <span>Zone</span>
+            <div class="segmented sm" id="qZone"><button data-v="strict">Stricte</button><button data-v="flex">Souple</button></div>
+            <label class="inline" id="qZoneThrWrap" title="En mode souple, les offres hors zone ne s'affichent qu'au-dessus de ce score">
+              hors zone si ≥ <input id="qZoneThr" type="number" min="0" max="100" step="5">
+            </label>
+          </div>
+          <div class="filter-group">
+            <span>Score ≥ <b id="qMinVal"></b></span>
+            <input id="qMin" type="range" aria-label="Score minimum" min="0" max="100" step="5">
+          </div>
+          <label class="filter-group filter-check" title="Masque les offres qui exigent la nationalité française ou européenne">
+            <input id="qNoNationality" type="checkbox"> Sans condition de nationalité
           </label>
         </div>
-        <div class="filter-group">
-          <span>Score ≥ <b id="qMinVal"></b></span>
-          <input id="qMin" type="range" aria-label="Score minimum" min="0" max="100" step="5">
-        </div>
-        <select id="qStatus" aria-label="Statut des offres">
-          <option value="active">À traiter</option><option value="fav">Favoris</option>
-          <option value="applied">Dans le suivi</option><option value="ignored">Masquées</option><option value="all">Toutes</option>
-          <option value="excluded">Entreprises exclues</option>
-        </select>
-        <select id="qSource" aria-label="Source"><option value="">Toutes les sources</option></select>
-        <select id="qSort" aria-label="Trier par"><option value="priority">À faire en priorité</option><option value="score">Pertinence</option><option value="date">Plus récentes</option></select>
       </div>
       <div id="stats" class="stats"></div>
       <div id="cards" class="cards"></div>
@@ -200,6 +216,33 @@
     </section>
 
     <!-- ========== Vue : suivi des candidatures ========== -->
+    <section id="viewAutoApply" class="view" hidden>
+      <header class="page-head">
+        <div>
+          <h1>Candidatures automatiques</h1>
+          <p class="muted">Pour chaque offre notée au-dessus du seuil, JobRadar prépare CV et lettre, vérifie le contrôle ATS puis envoie la candidature sans relecture. Indeed et LinkedIn : documents préparés seulement, l'envoi reste manuel.</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn ghost" id="aaRefresh" type="button">↻ Actualiser</button>
+          <button class="btn primary" id="aaRetryAll" type="button" disabled>Tout reprendre</button>
+        </div>
+      </header>
+      <p class="small" id="aaStatus" role="status" aria-live="polite"></p>
+      <div class="panel aa-settings">
+        <h2>Réglages par recherche</h2>
+        <ul id="aaSearches" class="aa-search-list"></ul>
+      </div>
+      <div class="aa-list-head">
+        <h2>Suivi des envois</h2>
+        <div class="segmented" id="aaFilter">
+          <button data-v="all" class="on">Toutes</button><button data-v="todo">À finir</button>
+          <button data-v="running">En cours</button><button data-v="sent">Envoyées</button>
+        </div>
+      </div>
+      <ul id="aaRecent" class="auto-apply-recent"></ul>
+      <p id="aaEmpty" class="muted" hidden>Aucune candidature automatique pour ce filtre.</p>
+    </section>
+
     <section id="viewTracker" class="view" hidden>
       <header class="page-head">
         <div>
@@ -213,6 +256,13 @@
       </header>
       <div id="tFollow" class="follow-banner" hidden></div>
       <div id="tStats" class="funnel"></div>
+      <section class="tracker-insights" aria-labelledby="insightsTitle">
+        <div class="sec-head"><div><h2 id="insightsTitle">Progression et marché</h2><p class="muted small">Calculs locaux à partir de tes candidatures et des offres analysées.</p></div></div>
+        <div class="insight-grid">
+          <article class="panel"><h3>Compétences les plus demandées</h3><div id="skillInsights" class="insight-list"><p class="muted small">Chargement…</p></div></article>
+          <article class="panel"><div class="sec-head"><h3>Résultats des candidatures</h3><select id="statsDimension" aria-label="Regrouper les statistiques"><option value="by_source">Par source</option><option value="by_base_cv">Par CV de base</option><option value="by_template">Par modèle</option><option value="by_mode">Par mode</option></select></div><div id="applicationInsights" class="insight-table"><p class="muted small">Chargement…</p></div></article>
+        </div>
+      </section>
       <div id="tKanban" class="kanban"></div>
       <div id="tList" class="panel table-wrap" hidden></div>
       <div id="tEmpty" class="empty" hidden>Aucune candidature suivie pour l'instant. Ouvre une offre et clique sur « Voir l'offre et candidater ».</div>

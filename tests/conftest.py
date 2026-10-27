@@ -27,7 +27,7 @@ os.environ["JOBRADAR_DATA_DIR"] = _SESSION_DIR
 os.environ["JOBRADAR_ARCHIVE_DIR"] = os.path.join(_SESSION_DIR, "candidatures")
 atexit.register(shutil.rmtree, _SESSION_DIR, ignore_errors=True)
 
-from jobradar import application_queue, archive, config, db, mailer, notifications  # noqa: E402
+from jobradar import application_queue, archive, config, db, mailer, notifications, preparation  # noqa: E402
 
 FIXED_NOW = datetime(2026, 10, 20, 8, 0, tzinfo=timezone.utc)  # 10 h à Paris
 
@@ -93,6 +93,7 @@ def fake_capture_module(level: str = "reconstituee", online: bool | None = None,
 
     module.capture_offer = capture_offer
     module.is_offer_online = is_offer_online
+    module.pdf_shows_wall = lambda pdf: b"mur de connexion" in pdf
     module.browser_status = lambda: {"available": False, "engine": None, "detail": "Navigateur simulé."}
     return module
 
@@ -298,8 +299,17 @@ def client(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
 
     archive.start_queue()
     application_queue.start_queue()
+    preparation.start_queue()
     try:
         yield LocalClient()
     finally:
+        preparation.stop_queue()
         application_queue.stop_queue()
         archive.stop_queue()
+
+
+@pytest.fixture(autouse=True)
+def supervision_off(monkeypatch: pytest.MonkeyPatch):
+    """La supervision IA de l'envoi n'appelle jamais l'IA réelle : les tests qui la couvrent la réactivent."""
+    from jobradar import application_supervisor
+    monkeypatch.setattr(application_supervisor, "mode", lambda: "off")

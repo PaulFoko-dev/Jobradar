@@ -73,6 +73,37 @@ def normalize_company(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+_NATIONALITY = re.compile(
+    r"nationalite\s+(?:francaise|europeenne|d[e'u]\s*(?:un\s+)?(?:pays|etat)s?\s+(?:membres?\s+)?de\s+l'?\s*"
+    r"(?:union\s+europeenne|ue|eee|espace\s+economique\s+europeen))"
+    r"|citoyennete\s+(?:francaise|europeenne)"
+    r"|ressortissante?s?\s+(?:francaise?s?|europeen(?:ne)?s?|d(?:e\s+l'|'un\s+(?:pays|etat)\s+(?:membre\s+)?de\s+l')\s*"
+    r"(?:union\s+europeenne|ue|eee))"
+    r"|(?:french|european|eu)\s+(?:union\s+)?(?:nationality|citizenship|citizens?|nationals?|passport)"
+    r"|(?:citizens?|nationals?)\s+of\s+(?:france|the\s+(?:european\s+union|eu))"
+)
+# Une alternative (titre de séjour, permis de travail…) dans la même phrase lève l'exigence.
+_NATIONALITY_ALTERNATIVE = re.compile(
+    r"titre\s+de\s+sejour|permis\s+de\s+travail|autorisation\s+de\s+travail|work\s+(?:permit|authori[sz]ation)"
+    r"|right\s+to\s+work|visa|aucune\s+condition|sans\s+condition|not\s+required|n'est\s+pas\s+(?:requise|exigee)"
+)
+
+
+def nationality_requirement(text: str | None) -> str | None:
+    """Phrase d'une offre qui exige la nationalité française ou européenne, sinon ``None``.
+
+    Détection prudente : la phrase est écartée si elle propose une alternative (titre de séjour, permis de
+    travail) ou écarte explicitement la condition.
+    """
+    if not text:
+        return None
+    for sentence in re.split(r"(?<=[.!?;:\n•])\s*", text):
+        folded = unicodedata.normalize("NFKD", sentence.replace("’", "'")).encode("ascii", "ignore").decode().lower()
+        if _NATIONALITY.search(folded) and not _NATIONALITY_ALTERNATIVE.search(folded):
+            return " ".join(sentence.split())[:240]
+    return None
+
+
 def validate_timezone(name: str) -> ZoneInfo:
     """Retourne un fuseau IANA valide ou lève une erreur explicite."""
     if not isinstance(name, str) or not name.strip():

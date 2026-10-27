@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from . import (
     ai,
+    analytics,
     application_flow,
     application_queue,
     archive,
@@ -26,9 +27,11 @@ from . import (
     export,
     interview_prep,
     interview_simulation,
+    login_credentials,
     mailer,
     notifications,
     pipeline,
+    preparation,
     profile,
     tailoring,
     workflow,
@@ -53,7 +56,12 @@ async def lifespan(_app: FastAPI):
         application_queue.start_queue()
     except Exception:
         LOGGER.exception("File des candidatures assistées indisponible ; le mode manuel reste utilisable.")
+    try:
+        preparation.start_queue()  # reprend les préparations interrompues par un arrêt
+    except Exception:
+        LOGGER.exception("File des préparations de documents indisponible.")
     yield
+    preparation.stop_queue()
     application_queue.stop_queue()
     archive.stop_queue()
 
@@ -243,6 +251,34 @@ def run(sid: int, score_only: bool = False):
     return {"started": True}
 
 
+class AutoApplyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool
+    min_score: StrictInt = Field(ge=0, le=100)
+    daily_limit: StrictInt = Field(ge=1, le=50)
+
+
+@app.get("/api/auto-apply")
+def auto_apply_overview():
+    return preparation.overview()
+
+
+@app.post("/api/auto-apply/retry")
+def auto_apply_retry_all():
+    return preparation.retry_all()
+
+
+@app.get("/api/searches/{sid}/auto-apply")
+def auto_apply_status(sid: int):
+    return preparation.status(sid)
+
+
+@app.put("/api/searches/{sid}/auto-apply")
+def configure_auto_apply(sid: int, body: AutoApplyIn):
+    return preparation.configure(sid, **body.model_dump())
+
+
 @app.get("/api/status")
 def status():
     return pipeline.STATE
@@ -303,6 +339,18 @@ class InterviewIn(InterviewPatch):
 @app.get("/api/applications")
 def applications():
     return db.list_applications()
+
+
+@app.get("/api/analytics/skills")
+def skill_analytics(limit: int = 30):
+    if not 1 <= limit <= 100:
+        raise HTTPException(400, "La limite doit être comprise entre 1 et 100.")
+    return analytics.demanded_skills(limit)
+
+
+@app.get("/api/analytics/applications")
+def application_analytics():
+    return analytics.application_statistics()
 
 
 @app.post("/api/applications")
@@ -740,10 +788,19 @@ def resolve_profile_conflict(body: ConflictResolutionIn):
 
 @app.post("/api/applications/{aid}/documents/prepare")
 def prepare_documents(aid: int, body: DocumentsPrepareIn):
-    try:
-        return tailoring.prepare(aid, **body.model_dump())
-    except ai.AIError as exc:
-        raise HTTPException(502, str(exc))
+    """Lance la préparation en arrière-plan : fermer la page ne l'interrompt pas."""
+    return preparation.start_manual(aid, body.model_dump())
+
+
+@app.get("/api/applications/{aid}/documents/preparation")
+def document_preparation(aid: int):
+    return {"job": preparation.latest(aid)}
+
+
+@app.post("/api/applications/{aid}/documents/preparation/consume")
+def consume_document_preparation(aid: int):
+    db.consume_preparation_jobs(aid)
+    return {"ok": True}
 
 
 @app.get("/api/applications/{aid}/documents/bases")
@@ -782,7 +839,9 @@ def assist_profile_project(body: dict):
 
 @app.post("/api/applications/{aid}/documents/render")
 def render_application_documents(aid: int, body: DocumentsRenderIn):
-    return tailoring.render_documents(aid, body.composition, body.letter, body.template)
+    result = tailoring.render_documents(aid, body.composition, body.letter, body.template)
+    db.consume_preparation_jobs(aid)
+    return result
 
 
 @app.get("/api/applications/{aid}/documents")
@@ -897,8 +956,11 @@ def application_archive(aid: int):
 @app.get("/api/applications/{aid}/archive/file")
 def application_archive_file(aid: int, path: str):
     target = archive.resolve_file(archive.directory_of(aid), path)
-    inline = target.suffix.lower() in {".pdf", ".png", ".jpg", ".jpeg"}  # aperçu dans l'onglet « Offre »
-    return FileResponse(target, media_type=archive.mime_type(target), filename=target.name,
+    # Le journal d'envoi se lit directement : texte brut, jamais interprété comme du HTML.
+    journal = target.name == "journal.md" and target.parent.name == "envoi"
+    inline = journal or target.suffix.lower() in {".pdf", ".png", ".jpg", ".jpeg"}  # aperçu dans l'onglet « Offre »
+    media_type = "text/plain; charset=utf-8" if journal else archive.mime_type(target)
+    return FileResponse(target, media_type=media_type, filename=target.name,
                         content_disposition_type="inline" if inline else "attachment",
                         headers={"X-Content-Type-Options": "nosniff"})
 
@@ -1029,6 +1091,56 @@ def test_email():
         raise HTTPException(429, str(e))
     except mailer.SendError as e:
         raise HTTPException(502, str(e))
+    return {"ok": True}
+
+
+class BrowserSettingsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    engine: Literal["chromium", "system"]
+    executable: str = Field("", max_length=1000)
+    cdp_port: StrictInt = Field(9333, ge=1024, le=65535)
+    keep_open: StrictBool | None = None
+    ai_supervision: Literal["always", "fallback", "off"] | None = None
+
+
+class LoginIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    domain: str = Field(max_length=253)
+    username: str = Field(max_length=320)
+    password: str = Field(max_length=2048)
+
+
+@app.get("/api/settings/browser")
+def get_browser_settings():
+    value = config.browser_settings()
+    return value | {"system_browser": config.find_system_browser(value["executable"]),
+                    "default_browser": config.default_browser_name(),
+                    "accounts": login_credentials.list_accounts()}
+
+
+@app.put("/api/settings/browser")
+def put_browser_settings(body: BrowserSettingsIn):
+    return config.save_browser_settings(body.model_dump(exclude_none=True))
+
+
+@app.post("/api/settings/browser/open")
+def open_browser():
+    from . import application_browser
+    try:
+        browser = application_browser.open_system_browser()
+    except application_browser.BrowserUnavailable as exc:
+        raise HTTPException(409, str(exc))
+    return {"ok": True, "name": browser["name"]}
+
+
+@app.post("/api/settings/logins")
+def put_login(body: LoginIn):
+    return login_credentials.store(body.domain, body.username, body.password)
+
+
+@app.delete("/api/settings/logins/{domain}")
+def delete_login(domain: str):
+    login_credentials.delete(domain)
     return {"ok": True}
 
 

@@ -182,3 +182,18 @@ def test_lien_postuler_d_une_page_d_offre() -> None:
       <a href="https://acme.example/jobs/42/apply">Postuler sur le site du recruteur</a>"""
     assert find_apply_link(page) == "https://acme.example/jobs/42/apply"
     assert find_apply_link("<a href='/offres'>Voir les offres</a>") is None
+
+
+def test_lien_d_action_est_prefere_a_l_aide_placee_avant() -> None:
+    from jobradar.application_adapters import find_apply_link
+    page = """<a href='/how-to-apply'>How to apply?</a>
+      <a href='/global/en/apply?jobSeqNo=42'>Apply Now</a>"""
+    assert find_apply_link(page) == "/global/en/apply?jobSeqNo=42"
+
+
+def test_formulaire_sans_balise_form_est_confine_au_plus_petit_conteneur() -> None:
+    page = """<main><div class='application'><label>Full name<input name='name'></label>
+      <label>Email<input type='email' name='email'></label><input type='file' name='resume'></div></main>"""
+    match = adapter_for("generic").locate(page)
+    assert match.selector == "[data-jobradar-form]"
+    assert {field.name for field in match.fields} == {"name", "email", "resume"}

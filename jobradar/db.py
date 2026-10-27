@@ -108,6 +108,8 @@ def _search_row(r) -> dict:
         "frequency": r["frequency"],
         "created_at": r["created_at"],
         "last_run": r["last_run"],
+        "auto_apply": {"enabled": bool(r["auto_apply_enabled"]), "min_score": r["auto_apply_min_score"],
+                       "daily_limit": r["auto_apply_daily_limit"]},
     }
 
 
@@ -371,6 +373,7 @@ def list_offers(search_id: int) -> list[dict]:
         o["company_rule"] = rules.get(company, "neutral")
         decision = workflow.deadline_status(_date(o["application_deadline_date"]), now=at, timezone_name=st.timezone)
         o["deadline"] = _deadline_view(o, decision, at, st)
+        o["nationality_required"] = workflow.nationality_requirement(f"{o['title'] or ''}.\n{o['description'] or ''}")
         other = next((a for a in sent.get(company, []) if a["offer_id"] != o["id"]), None) if company else None
         o["already_applied"] = None if other is None else {
             "application_id": other["id"], "title": other["title"], "status": other["status"],
@@ -696,6 +699,14 @@ def pending_captures(reset_running: bool = False) -> list[int]:
 def applications_without_archive() -> list[int]:
     with connect() as c:
         return [r[0] for r in c.execute("SELECT id FROM applications WHERE archive_dir IS NULL ORDER BY id")]
+
+
+def captured_pages() -> list[dict]:
+    """Captures terminées dont la copie vient de la page d'origine."""
+    with connect() as c:
+        return [dict(r) for r in c.execute(
+            """SELECT id, archive_dir FROM applications WHERE capture_status='done' AND archive_dir IS NOT NULL
+               AND capture_level IN ('page', 'page_navigateur_dedie') ORDER BY id""")]
 
 
 def known_archive_ids() -> set[str]:
@@ -1319,6 +1330,143 @@ def claim_next_application_attempt() -> dict | None:
         if not won:
             return None
         return _attempt_row(c.execute("SELECT * FROM application_attempts WHERE id=?", (row["id"],)).fetchone())
+
+
+def set_auto_apply(search_id: int, *, enabled: bool, min_score: int, daily_limit: int) -> dict:
+    """Réglages d'auto-candidature d'une recherche (bornes vérifiées ici aussi)."""
+    if not 0 <= min_score <= 100 or not 1 <= daily_limit <= 50:
+        raise ValueError("Score minimal entre 0 et 100, plafond quotidien entre 1 et 50.")
+    with connect() as c:
+        done = c.execute(
+            """UPDATE searches SET auto_apply_enabled=?, auto_apply_min_score=?, auto_apply_daily_limit=?
+               WHERE id=?""",
+            (int(enabled), min_score, daily_limit, search_id),
+        ).rowcount
+        if not done:
+            raise NotFound("Recherche introuvable.")
+        return _search_row(c.execute("SELECT * FROM searches WHERE id=?", (search_id,)).fetchone())
+
+
+def mark_offer_auto_applied(offer_id: int) -> bool:
+    """Réserve une offre pour l'auto-candidature ; faux si elle l'a déjà été (une seule fois par offre)."""
+    with connect() as c:
+        return c.execute("UPDATE offers SET auto_apply_at_utc=? WHERE id=? AND auto_apply_at_utc IS NULL",
+                         (utc_iso(utcnow(), "auto_apply_at"), offer_id)).rowcount == 1
+
+
+def auto_applied_offer_count(search_id: int, since_utc: datetime) -> int:
+    with connect() as c:
+        return c.execute("SELECT COUNT(*) FROM offers WHERE search_id=? AND auto_apply_at_utc >= ?",
+                         (search_id, utc_iso(since_utc, "since"))).fetchone()[0]
+
+
+# ---------------------------------------------------------------- préparations CV/lettre
+
+PREPARATION_ACTIVE = ("queued", "running")
+
+
+def _document_job_row(row) -> dict:
+    data = dict(row)
+    data["params"] = json.loads(data.pop("params_json") or "{}")
+    raw = data.pop("result_json")
+    data["result"] = json.loads(raw) if raw else None
+    return data
+
+
+def create_preparation_job(application_id: int, *, origin: str, params: dict) -> dict:
+    """File une préparation ; refusée si une autre est déjà en attente ou en cours pour cette candidature."""
+    if origin not in {"manual", "auto"}:
+        raise ValueError("Origine de préparation invalide.")
+    with connect() as c:
+        _get_app(c, application_id)
+        if c.execute("SELECT 1 FROM preparation_jobs WHERE application_id=? AND status IN ('queued', 'running')",
+                     (application_id,)).fetchone():
+            raise Conflict("Une préparation de documents est déjà en cours pour cette candidature.")
+        cur = c.execute(
+            """INSERT INTO preparation_jobs(application_id, origin, params_json, status, created_at_utc)
+               VALUES (?,?,?,'queued',?)""",
+            (application_id, origin, json.dumps(params, ensure_ascii=False), utc_iso(utcnow(), "created_at")),
+        )
+        return _document_job_row(c.execute("SELECT * FROM preparation_jobs WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+def get_preparation_job(job_id: int) -> dict:
+    with connect() as c:
+        row = c.execute("SELECT * FROM preparation_jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            raise NotFound("Préparation introuvable.")
+        return _document_job_row(row)
+
+
+def latest_preparation_job(application_id: int) -> dict | None:
+    with connect() as c:
+        _get_app(c, application_id)
+        row = c.execute("SELECT * FROM preparation_jobs WHERE application_id=? ORDER BY id DESC LIMIT 1",
+                        (application_id,)).fetchone()
+        return _document_job_row(row) if row else None
+
+
+def claim_next_preparation_job() -> dict | None:
+    """Réserve atomiquement la plus ancienne préparation en attente."""
+    timestamp = utc_iso(utcnow(), "started_at")
+    with connect() as c:
+        row = c.execute(
+            "SELECT id FROM preparation_jobs WHERE status='queued' ORDER BY created_at_utc, id LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        won = c.execute(
+            "UPDATE preparation_jobs SET status='running', started_at_utc=? WHERE id=? AND status='queued'",
+            (timestamp, row["id"]),
+        ).rowcount
+        if not won:
+            return None
+        return _document_job_row(c.execute("SELECT * FROM preparation_jobs WHERE id=?", (row["id"],)).fetchone())
+
+
+def update_preparation_job(job_id: int, **fields) -> dict:
+    """Avancement d'une préparation en cours ; ``status`` final (done | failed) date la fin."""
+    allowed = {"status", "step", "session_id", "result", "attempt_id", "error"}
+    if set(fields) - allowed:
+        raise ValueError("Champ de préparation inconnu.")
+    if "result" in fields:
+        fields["result_json"] = json.dumps(fields.pop("result"), ensure_ascii=False)
+    if fields.get("status") in {"done", "failed"}:
+        fields["finished_at_utc"] = utc_iso(utcnow(), "finished_at")
+    with connect() as c:
+        assignments = ", ".join(f"{name}=?" for name in fields)
+        c.execute(f"UPDATE preparation_jobs SET {assignments} WHERE id=?", (*fields.values(), job_id))
+        row = c.execute("SELECT * FROM preparation_jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            raise NotFound("Préparation introuvable.")
+        return _document_job_row(row)
+
+
+def consume_preparation_jobs(application_id: int) -> None:
+    """La page a repris le résultat (documents générés ou écran fermé) : il n'est plus proposé à la reprise."""
+    with connect() as c:
+        c.execute("""UPDATE preparation_jobs SET consumed_at_utc=? WHERE application_id=?
+                     AND status IN ('done', 'failed') AND consumed_at_utc IS NULL""",
+                  (utc_iso(utcnow(), "consumed_at"), application_id))
+
+
+def recover_preparation_jobs() -> int:
+    """Après un arrêt de JobRadar, les préparations interrompues repartent depuis le début."""
+    with connect() as c:
+        return c.execute("UPDATE preparation_jobs SET status='queued', step=NULL WHERE status='running'").rowcount
+
+
+def recent_auto_preparations(search_id: int, limit: int = 1000) -> list[dict]:
+    """Dernières préparations automatiques des offres d'une recherche, pour l'état affiché."""
+    with connect() as c:
+        rows = c.execute(
+            """SELECT p.*, a.title, a.company FROM preparation_jobs p
+               JOIN applications a ON a.id = p.application_id
+               JOIN offers o ON o.id = a.offer_id
+               WHERE p.origin='auto' AND o.search_id=? ORDER BY p.id DESC LIMIT ?""",
+            (search_id, limit),
+        ).fetchall()
+        return [_document_job_row(row) for row in rows]
 
 
 def assisted_submitted_count() -> int:

@@ -8,7 +8,10 @@ dossier des archives de candidatures suit la même règle avec
 """
 import json
 import os
+import plistlib
+import shutil
 import stat
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +80,8 @@ DEFAULT_CONFIG = {
         "username": "",
         "kinds": ["high_score_offer", "follow_up_due", "interview_reminder"],
     },
+    "browser": {"engine": "system", "executable": "", "cdp_port": 9333, "keep_open": True,
+                "ai_supervision": "always"},
     # Nombre d'offres envoyées à Claude par appel, et appels en parallèle.
     "scoring_batch_size": 4,
     "scoring_parallel": 3,
@@ -133,8 +138,141 @@ def archive_dir(cfg: dict | None = None, environ: dict | None = None) -> Path:
 
 
 def browser_profile_dir() -> Path:
-    """Profil du navigateur dédié aux captures (sessions) : sensible, jamais sauvegardé ni partagé."""
+    """Profil durable du navigateur de candidature : sensible, jamais sauvegardé ni partagé."""
     return DATA_DIR / "navigateur"
+
+
+def capture_profile_dir() -> Path:
+    """Profil séparé des captures : elles ne peuvent pas affamer une candidature."""
+    return DATA_DIR / "navigateur-captures"
+
+
+def system_profile_root() -> Path:
+    return DATA_DIR / "navigateur-systeme"
+
+
+def system_profile_dir(key: str) -> Path:
+    """Un profil par navigateur : Chrome et Brave ne partagent jamais le même dossier."""
+    return system_profile_root() / key
+
+
+def browser_settings(cfg: dict | None = None) -> dict:
+    raw = (load_config() if cfg is None else cfg).get("browser", {})
+    raw = raw if isinstance(raw, dict) else {}
+    engine = "system" if raw.get("engine") == "brave" else raw.get("engine")
+    engine = engine if engine in {"chromium", "system"} else "system"
+    executable = str(raw.get("executable") or "").strip()
+    port = raw.get("cdp_port", 9333)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
+        port = 9333
+    keep_open = raw.get("keep_open", True)
+    # always : l'IA supervise chaque étape ; fallback : seulement si les heuristiques échouent ; off : jamais.
+    supervision = raw.get("ai_supervision") if raw.get("ai_supervision") in {"always", "fallback", "off"} else "always"
+    return {"engine": engine, "executable": executable, "cdp_port": port,
+            "keep_open": keep_open if isinstance(keep_open, bool) else True, "ai_supervision": supervision}
+
+
+# Navigateurs pilotables (Chromium) : nom affiché, mots qui les reconnaissent comme navigateur par défaut,
+# commandes du PATH puis emplacements usuels Windows/macOS/Linux.
+_LOCAL = os.environ.get("LOCALAPPDATA", "")
+CHROMIUM_BROWSERS = {
+    "chrome": ("Google Chrome", ("chrome",), ("google-chrome", "google-chrome-stable"), (
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        _LOCAL + r"\Google\Chrome\Application\chrome.exe",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")),
+    "edge": ("Microsoft Edge", ("msedge", "edge"), ("microsoft-edge", "microsoft-edge-stable"), (
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")),
+    "brave": ("Brave", ("brave",), ("brave", "brave-browser"), (
+        "/snap/bin/brave",
+        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+        _LOCAL + r"\BraveSoftware\Brave-Browser\Application\brave.exe",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")),
+    "chromium": ("Chromium", ("chromium",), ("chromium", "chromium-browser"), (
+        "/snap/bin/chromium", "/Applications/Chromium.app/Contents/MacOS/Chromium")),
+    "vivaldi": ("Vivaldi", ("vivaldi",), ("vivaldi", "vivaldi-stable"), (
+        _LOCAL + r"\Vivaldi\Application\vivaldi.exe", "/Applications/Vivaldi.app/Contents/MacOS/Vivaldi")),
+    "opera": ("Opera", ("opera",), ("opera",), (
+        _LOCAL + r"\Programs\Opera\opera.exe", "/Applications/Opera.app/Contents/MacOS/Opera")),
+}
+OTHER_BROWSERS = {"firefox": "Firefox", "safari": "Safari"}
+
+
+def _default_browser_id() -> str:
+    """Identifiant brut du navigateur par défaut (fichier .desktop, ProgId ou bundle id) ; vide si inconnu."""
+    try:
+        if sys.platform.startswith("win"):
+            import winreg
+            key = r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as handle:
+                return str(winreg.QueryValueEx(handle, "ProgId")[0])
+        if sys.platform == "darwin":
+            plist = (Path.home() / "Library/Preferences/com.apple.LaunchServices"
+                     / "com.apple.launchservices.secure.plist")
+            handlers = plistlib.loads(plist.read_bytes()).get("LSHandlers", [])
+            return next((str(h.get("LSHandlerRoleAll", "")) for h in handlers
+                         if h.get("LSHandlerURLScheme") in {"https", "http"}), "com.apple.safari")
+        result = subprocess.run(["xdg-settings", "get", "default-web-browser"],
+                                capture_output=True, text=True, timeout=5)
+        return result.stdout.strip()
+    except (OSError, ValueError, subprocess.SubprocessError, plistlib.InvalidFileException):
+        return ""
+
+
+def default_browser() -> str | None:
+    """Clé du navigateur par défaut (``brave``, ``chrome``, ``firefox``…), ou None s'il est inconnu."""
+    raw = _default_browser_id().casefold()
+    if not raw:
+        return None
+    # Edge avant Chrome : son bundle macOS ne contient pas « chrome », mais certains ProgId Chromium oui.
+    for key in ("edge", "brave", "vivaldi", "opera", "chromium", "chrome"):
+        if any(word in raw for word in CHROMIUM_BROWSERS[key][1]):
+            return key
+    return next((key for key in OTHER_BROWSERS if key in raw), None)
+
+
+def _installed(key: str) -> str | None:
+    _name, _words, commands, paths = CHROMIUM_BROWSERS[key]
+    candidates = [shutil.which(command) or "" for command in commands] + list(paths)
+    return next((str(Path(item)) for item in candidates if item and Path(item).is_file()), None)
+
+
+def find_system_browser(explicit: str = "") -> dict | None:
+    """Navigateur de candidature : l'exécutable imposé, sinon celui par défaut s'il est pilotable,
+    sinon le premier navigateur Chromium installé."""
+    default = default_browser()
+    if explicit:
+        if not Path(explicit).is_file():
+            return None
+        lowered = Path(explicit).name.casefold()
+        key = next((k for k, v in CHROMIUM_BROWSERS.items() if any(w in lowered for w in v[1])), "personnalise")
+        name = CHROMIUM_BROWSERS[key][0] if key in CHROMIUM_BROWSERS else Path(explicit).stem
+        return {"key": key, "name": name, "path": str(Path(explicit)), "is_default": key == default}
+    order = ([default] if default in CHROMIUM_BROWSERS else []) + list(CHROMIUM_BROWSERS)
+    for key in order:
+        path = _installed(key)
+        if path:
+            return {"key": key, "name": CHROMIUM_BROWSERS[key][0], "path": path, "is_default": key == default}
+    return None
+
+
+def default_browser_name() -> str | None:
+    key = default_browser()
+    return CHROMIUM_BROWSERS[key][0] if key in CHROMIUM_BROWSERS else OTHER_BROWSERS.get(key or "")
+
+
+def save_browser_settings(value: dict) -> dict:
+    unknown = set(value) - {"engine", "executable", "cdp_port", "keep_open", "ai_supervision"}
+    if unknown:
+        raise ValueError("Réglage navigateur inconnu.")
+    merged = browser_settings() | value
+    normalized = browser_settings({"browser": merged})
+    if value.get("engine") not in {None, "chromium", "system"}:
+        raise ValueError("Moteur navigateur invalide.")
+    save_config_section("browser", normalized)
+    return normalized
 
 
 def load_config() -> dict:

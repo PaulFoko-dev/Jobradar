@@ -84,6 +84,11 @@ def test_workday_has_a_bounded_number_of_steps() -> None:
     assert application_browser.WORKDAY_MAX_STEPS == 8
 
 
+def test_render_and_profile_lock_waits_are_bounded_but_robust() -> None:
+    assert application_browser.RENDER_WAIT_MS == 15_000
+    assert application_browser.APPLICATION_LOCK_TIMEOUT_S >= 20
+
+
 @pytest.mark.parametrize(("policy", "submitted", "expected"), [
     ("always", 50, True), ("never", 0, False),
     ("first_five", 4, True), ("first_five", 5, False),

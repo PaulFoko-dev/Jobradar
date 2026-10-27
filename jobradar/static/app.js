@@ -194,11 +194,12 @@ function showView(id) {
   $$(".view").forEach(v => (v.hidden = v.id !== id));
   $("#trackerNav").classList.toggle("on", id === "viewTracker");
   $("#profileNav")?.classList.toggle("on", id === "viewProfile");
+  $("#autoApplyNav").classList.toggle("on", id === "viewAutoApply");
   if (id !== "viewResults") $$("#searchList .search-item").forEach(b => b.classList.remove("on"));
 }
 
 function prefs(id) {
-  const def = { zone: "flex", zoneThr: 75, min: 40, status: "active", source: "", sort: "score" };
+  const def = { zone: "flex", zoneThr: 75, min: 40, status: "active", source: "", sort: "score", noNationality: true };
   try { return { ...def, ...JSON.parse(localStorage.getItem(`jr-prefs-${id}`) || "{}") }; } catch { return def; }
 }
 function savePrefs(id, p) {
@@ -442,8 +443,184 @@ async function openResults(id) {
     + (s.last_run ? ` · dernière exécution ${new Date(s.last_run).toLocaleString("fr-FR")}` : " · jamais exécutée");
   applyPrefsToFilters(prefs(id));
   showView("viewResults");
+  loadAutoApply();
   await loadOffers();
   pollStatus();
+}
+
+// ------------------------------------------------------------------ auto-candidature
+
+const AA_STEPS = {
+  queued: "en attente", prepare: "rédaction des documents", render: "création des fichiers", apply: "mise en file de l'envoi",
+  queued_for_submission: "envoi assisté lancé", manual: "documents prêts, envoi manuel requis",
+};
+
+function autoApplyStepLabel(job) {
+  if (job.status === "failed") return "arrêtée";
+  if (job.status === "queued") return AA_STEPS.queued;
+  return AA_STEPS[job.step] || (job.status === "done" ? "terminée" : "en cours");
+}
+
+function autoApplyResult(job) {
+  const attempt = job.attempt;
+  const reason = attempt?.intervention?.message || job.error || "";
+  if (!attempt) return job.status === "failed" ? `Préparation arrêtée : ${reason}` : "Préparation en cours…";
+  if (attempt.status === "submitted") return "Envoyée ✓";
+  if (attempt.status === "needs_user") return `À finir toi-même : ${reason}`;
+  if (["queued", "running"].includes(attempt.status)) return "En cours…";
+  if (attempt.status === "manual_open") return "À finir toi-même : envoi manuel ouvert";
+  return reason || attempt.status;
+}
+
+function autoApplyGroup(job) {
+  const attempt = job.attempt;
+  if (attempt?.status === "submitted") return "sent";
+  if (["queued", "running"].includes(job.status) || ["queued", "running"].includes(attempt?.status)) return "running";
+  return "todo";
+}
+
+function autoApplyItem(job) {
+  const attempt = job.attempt;
+  return `<li class="aa-${autoApplyGroup(job)}"><span class="aa-state ${esc(job.status)}">${esc(autoApplyStepLabel(job))}</span>
+    <b>${esc(job.company || "Entreprise")} — ${esc(job.title || "Poste")}</b>
+    ${job.search_name ? `<span class="aa-search muted">${esc(job.search_name)}</span>` : ""}
+    <span class="aa-result">${esc(autoApplyResult(job))}</span>
+    ${job.supervision?.understanding ? `<span class="aa-ai">IA : ${esc(job.supervision.understanding)}</span>` : ""}
+    <button class="link" type="button" data-aa-app="${esc(job.application_id)}">Voir la candidature</button>
+    ${job.resumable ? `<button class="link" type="button" data-aa-retry="${attempt.id}">Reprendre</button>` : ""}
+    ${job.proofs?.["avant-envoi.png"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["avant-envoi.png"])}">Voir la capture</a>` : ""}
+    ${job.proofs?.["confirmation.png"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["confirmation.png"])}">Confirmation</a>` : ""}
+    ${job.proofs?.["journal.md"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["journal.md"])}">Journal</a>` : ""}</li>`;
+}
+
+function autoApplyActive(recent) {
+  return recent.some(job => autoApplyGroup(job) === "running");
+}
+
+// Bandeau compact sur la page d'une recherche : le détail vit sur la page « Candidatures auto ».
+function renderAutoApply(info) {
+  const { settings, today, recent = [] } = info;
+  const todo = recent.filter(job => job.resumable).length;
+  const running = recent.filter(job => autoApplyGroup(job) === "running").length;
+  $("#autoApply").classList.toggle("on", settings.enabled);
+  $("#aaBarText").textContent = [
+    settings.enabled ? `Auto-candidature active : score ≥ ${settings.min_score}, ${settings.daily_limit} par jour` : "Auto-candidature désactivée",
+    today ? `${today} aujourd'hui` : "",
+    running ? `${running} en cours` : "",
+    todo ? `${todo} à reprendre` : "",
+  ].filter(Boolean).join(" · ");
+  if (running) {
+    clearTimeout(state.autoApplyTimer);
+    state.autoApplyTimer = setTimeout(loadAutoApply, 5000);
+  }
+}
+
+async function loadAutoApply() {
+  const id = state.currentId;
+  try {
+    const info = await api(`/api/searches/${id}/auto-apply`);
+    if (id === state.currentId) renderAutoApply(info);
+  } catch (e) { $("#aaBarText").textContent = `Auto-candidature indisponible : ${e.message}`; }
+}
+
+function renderAutoApplyPage(info) {
+  state.autoApplyInfo = info;
+  const { searches, recent } = info;
+  const today = searches.reduce((n, s) => n + s.today, 0);
+  const resumable = recent.filter(job => job.resumable).length;
+  const sent = recent.filter(job => autoApplyGroup(job) === "sent").length;
+  $("#autoApplyCount").textContent = resumable;
+  $("#autoApplyCount").hidden = !resumable;
+  $("#aaRetryAll").disabled = !resumable;
+  $("#aaRetryAll").textContent = resumable ? `Tout reprendre (${resumable})` : "Tout reprendre";
+  $("#aaStatus").textContent = `Aujourd'hui : ${today} candidature${today > 1 ? "s" : ""} automatique${today > 1 ? "s" : ""}`
+    + ` · ${sent} envoyée${sent > 1 ? "s" : ""} au total · ${resumable} à reprendre.`;
+  $("#aaSearches").innerHTML = searches.length ? searches.map(s => `<li data-aa-search="${s.id}" class="${s.settings.enabled ? "on" : ""}">
+      <label class="switch-row">
+        <input type="checkbox" role="switch" data-aa-enabled ${s.settings.enabled ? "checked" : ""}>
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span><b>${esc(s.name)}</b><small class="muted">${s.settings.enabled
+          ? `Active · ${s.today} aujourd'hui, encore ${s.remaining_today} possible${s.remaining_today > 1 ? "s" : ""}`
+          : "Désactivée : rien n'est préparé ni envoyé sans toi."}</small></span>
+      </label>
+      <div class="auto-apply-fields">
+        <label class="inline">Score ≥ <input data-aa-min type="number" min="0" max="100" step="5" value="${s.settings.min_score}"></label>
+        <label class="inline">au plus <input data-aa-limit type="number" min="1" max="50" step="1" value="${s.settings.daily_limit}"> par jour</label>
+        <button class="btn sm" type="button" data-aa-save>Enregistrer</button>
+      </div></li>`).join("") : `<li class="muted">Crée d'abord une recherche.</li>`;
+  $$("[data-aa-search]", $("#aaSearches")).forEach(row => {
+    const id = Number(row.dataset.aaSearch), input = $("[data-aa-enabled]", row);
+    input.onchange = async () => {
+      const wanted = input.checked;
+      input.disabled = true;
+      try { if (!(await saveAutoApply(id, row, wanted))) input.checked = !wanted; }
+      catch (e) { input.checked = !wanted; toast(e.message, 6000); }
+      finally { input.disabled = false; }
+    };
+    $("[data-aa-save]", row).onclick = async event => {
+      try { await saveAutoApply(id, row, input.checked, event.currentTarget); } catch (e) { toast(e.message, 6000); }
+    };
+  });
+  renderAutoApplyList();
+  if (autoApplyActive(recent) && !$("#viewAutoApply").hidden) {
+    clearTimeout(state.autoApplyTimer);
+    state.autoApplyTimer = setTimeout(loadAutoApplyPage, 5000);
+  }
+}
+
+function renderAutoApplyList() {
+  const filter = chipValues($("#aaFilter"))[0] || "all";
+  const recent = (state.autoApplyInfo?.recent || []).filter(job => filter === "all" || autoApplyGroup(job) === filter);
+  $("#aaRecent").innerHTML = recent.map(autoApplyItem).join("");
+  $("#aaEmpty").hidden = recent.length > 0;
+  $$("[data-aa-app]", $("#aaRecent")).forEach(button => (button.onclick = async () => {
+    await openTracker();
+    openAppModal(Number(button.dataset.aaApp));
+  }));
+  $$("[data-aa-retry]", $("#aaRecent")).forEach(button => (button.onclick = async () => {
+    try {
+      await api(`/api/application-attempts/${button.dataset.aaRetry}/retry`, { method: "POST" });
+      toast("Candidature relancée");
+    } catch (e) { toast(e.message, 5000); }
+    await loadAutoApplyPage();
+  }));
+}
+
+async function loadAutoApplyPage() {
+  try { renderAutoApplyPage(await api("/api/auto-apply")); }
+  catch (e) { $("#aaStatus").textContent = `Auto-candidature indisponible : ${e.message}`; }
+}
+
+async function openAutoApply() {
+  stopPolling();
+  state.currentId = null;
+  showView("viewAutoApply");
+  await loadAutoApplyPage();
+}
+
+async function retryAllAutoApply(button) {
+  const count = (state.autoApplyInfo?.recent || []).filter(job => job.resumable).length;
+  if (!count || !confirm(`Relancer ${count} candidature${count > 1 ? "s" : ""} arrêtée${count > 1 ? "s" : ""} ?\n\nLe robot les reprend une par une ; celles qui aboutissent sont envoyées sans relecture. Les offres closes, déjà envoyées ou à finir sur un site manuel ne sont pas relancées.`)) return;
+  const { retried } = await busy(button, "Relance…", () => api("/api/auto-apply/retry", { method: "POST" }));
+  toast(retried ? `${retried} candidature${retried > 1 ? "s" : ""} relancée${retried > 1 ? "s" : ""}` : "Aucune candidature à relancer");
+  await loadAutoApplyPage();
+}
+
+async function saveAutoApply(searchId, row, enabled, button) {
+  const minScore = Number($("[data-aa-min]", row).value), dailyLimit = Number($("[data-aa-limit]", row).value);
+  if (!Number.isInteger(minScore) || minScore < 0 || minScore > 100) throw new Error("Le score minimal doit être un entier entre 0 et 100.");
+  if (!Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 50) throw new Error("Le plafond quotidien doit être un entier entre 1 et 50.");
+  if (enabled && !confirm(`Activer l'auto-candidature pour cette recherche ?\n\nPour chaque offre notée ${minScore} ou plus (au plus ${dailyLimit} par jour), JobRadar va préparer CV et lettre puis envoyer la candidature automatiquement, sans relecture de ta part. Les offres Indeed et LinkedIn auront seulement leurs documents préparés.`)) {
+    return false;
+  }
+  const run = () => api(`/api/searches/${searchId}/auto-apply`, {
+    method: "PUT", body: { enabled, min_score: minScore, daily_limit: dailyLimit },
+  });
+  const info = button ? await busy(button, "Enregistrement…", run) : await run();
+  if (info.scheduled) toast(`${info.scheduled} offre${info.scheduled > 1 ? "s" : ""} confiée${info.scheduled > 1 ? "s" : ""} à l'auto-candidature`);
+  else toast(enabled ? "Auto-candidature active" : "Auto-candidature désactivée");
+  await loadAutoApplyPage();
+  return true;
 }
 
 async function loadOffers() {
@@ -465,6 +642,7 @@ function applyPrefsToFilters(p) {
   $("#qMinVal").textContent = p.min;
   $("#qStatus").value = p.status;
   $("#qSort").value = p.sort;
+  $("#qNoNationality").checked = p.noNationality;
 }
 
 function readFilters() {
@@ -475,6 +653,7 @@ function readFilters() {
     status: $("#qStatus").value,
     source: $("#qSource").value,
     sort: $("#qSort").value,
+    noNationality: $("#qNoNationality").checked,
   };
   savePrefs(state.currentId, p);
   $("#qZoneThrWrap").hidden = p.zone !== "flex";
@@ -501,6 +680,7 @@ function filteredOffers() {
       if ((o.score ?? 0) < p.zoneThr) return false;
     }
     if (p.source && !o.links.some(l => l.source === p.source)) return false;
+    if (p.noNationality && o.nationality_required) return false;
     return matchesText(o, q);
   });
   if (p.sort === "priority") list.sort((a, b) => a.priority_order - b.priority_order);
@@ -561,6 +741,7 @@ function renderOffers() {
     <span class="stat"><b>${all.filter(o => (o.score ?? 0) >= 75).length}</b> très pertinentes</span>
     <span class="stat"><b>${all.filter(o => o.app_id).length}</b> dans le suivi</span>
     ${all.some(o => o.company_rule === "excluded") ? `<span class="stat"><b>${all.filter(o => o.company_rule === "excluded").length}</b> d'entreprises exclues</span>` : ""}
+    ${all.some(o => o.nationality_required) ? `<span class="stat" title="Offres exigeant la nationalité française ou européenne"><b>${all.filter(o => o.nationality_required).length}</b> avec condition de nationalité</span>` : ""}
     ${pending ? `<span class="stat"><b>${pending}</b> en attente d'analyse · <button class="link" id="scorePending">analyser maintenant</button></span>` : ""}`;
   const sp = $("#scorePending");
   if (sp) sp.onclick = async () => {
@@ -832,7 +1013,49 @@ async function openTracker() {
   showView("viewTracker");
   await Promise.all([loadApps(), loadFollowUps()]);
   renderTracker();
+  loadTrackerInsights();
 }
+
+let trackerAnalytics = null;
+
+async function loadTrackerInsights() {
+  try {
+    const [skills, applications] = await Promise.all([
+      api("/api/analytics/skills?limit=15"), api("/api/analytics/applications"),
+    ]);
+    trackerAnalytics = applications;
+    renderSkillInsights(skills);
+    renderApplicationInsights();
+  } catch (error) {
+    $("#skillInsights").innerHTML = `<p class="muted small">${esc(error.message)}</p>`;
+    $("#applicationInsights").innerHTML = `<p class="muted small">${esc(error.message)}</p>`;
+  }
+}
+
+function renderSkillInsights(data) {
+  const root = $("#skillInsights");
+  if (!data.items.length) {
+    root.innerHTML = `<p class="muted small">Analyse des offres nécessaire pour afficher les tendances.</p>`;
+    return;
+  }
+  const max = Math.max(...data.items.map(item => item.offers), 1);
+  root.innerHTML = data.items.map(item => `<div class="skill-insight">
+    <div><b>${esc(item.name)}</b><span>${item.offers} offre${item.offers > 1 ? "s" : ""} · ${item.share} %</span></div>
+    <div class="insight-bar"><i style="--w:${Math.round(100 * item.offers / max)}%"></i></div>
+  </div>`).join("");
+}
+
+function renderApplicationInsights() {
+  if (!trackerAnalytics) return;
+  const rows = trackerAnalytics[$("#statsDimension").value] || [];
+  $("#applicationInsights").innerHTML = rows.length ? `<table><thead><tr><th>Groupe</th><th>Envoyées</th><th>Réponses</th><th>Entretiens</th></tr></thead><tbody>${rows.map(row => `<tr>
+    <td>${esc(row.label)}</td><td>${row.sent}</td><td>${row.response_rate == null ? "–" : `${row.response_rate} %`}</td><td>${row.interview_rate == null ? "–" : `${row.interview_rate} %`}</td>
+  </tr>`).join("")}</tbody></table>` : `<p class="muted small">Pas encore assez de données.</p>`;
+}
+
+document.addEventListener("change", event => {
+  if (event.target?.id === "statsDimension") renderApplicationInsights();
+});
 
 function relDate(iso) {
   return fmtDate(iso);
@@ -1935,6 +2158,8 @@ const NOTIF_ICONS = {
   follow_up_due: `<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>`,
   interview_reminder: `<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`,
   application_intervention: `<svg viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5M12 17h.01"/></svg>`,
+  auto_apply_failed: `<svg viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5M12 17h.01"/></svg>`,
+  auto_apply_manual: `<svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 14l2 2 4-4"/></svg>`,
   application_submitted: `<svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>`,
 };
 
@@ -1948,6 +2173,8 @@ function notifText(n) {
     head: `Entretien ${fmtDay(p.starts_at, { weekday: "long", day: "numeric", month: "long" })} à ${fmtTime(p.starts_at)}`,
     who, extra: p.location || "",
   };
+  if (n.kind === "auto_apply_failed") return { head: "Auto-candidature arrêtée", who, extra: p.message || "Une action est nécessaire." };
+  if (n.kind === "auto_apply_manual") return { head: "Documents prêts · envoi manuel", who, extra: p.message || "" };
   if (n.kind === "application_intervention") return { head: "Candidature en attente", who, extra: p.message || "Une action est nécessaire." };
   if (n.kind === "application_submitted") return { head: "Candidature envoyée", who, extra: "Les preuves ont été archivées." };
   return { head: "Notification", who, extra: "" };
@@ -2239,7 +2466,44 @@ async function testEmail(btn) {
   });
 }
 
-const SETTINGS_TABS = [["email", "Alertes par e-mail"], ["archives", "Archives et sauvegarde"]];
+const SETTINGS_TABS = [["email", "Alertes par e-mail"], ["browser", "Candidatures"], ["archives", "Archives et sauvegarde"]];
+
+function browserSettingsHtml() {
+  return `<div class="m-pad settings"><fieldset class="e-group"><legend>Navigateur de candidature</legend>
+    <label>Moteur <select id="bEngine"><option value="system">Navigateur du système (recommandé)</option><option value="chromium">Chromium intégré</option></select></label>
+    <p class="muted small" id="bDetected"></p>
+    <label>Exécutable (facultatif) <input id="bExecutable" placeholder="Détection automatique"></label>
+    <label>Port CDP <input id="bPort" type="number" min="1024" max="65535"></label>
+    <button class="btn primary" id="bSave">Enregistrer</button>
+    <button class="btn" id="bOpen" title="Ouvre le navigateur avec le profil réservé à JobRadar : connecte-toi une fois à tes comptes, il s'en souviendra.">Ouvrir le navigateur pour me connecter</button>
+    <p class="muted small">Ton profil habituel ne peut pas être piloté (protection des navigateurs) : JobRadar utilise un profil à part. Connecte-toi une fois à tes comptes (Google, HelloWork, Workday, Welcome to the Jungle…) dans cette fenêtre. En terminal : <code>python -m jobradar.cli navigateur</code>.</p></fieldset>
+    <fieldset class="e-group"><legend>Identifiant par domaine</legend>
+    <label>Domaine <input id="lDomain" placeholder="careers.example.com"></label>
+    <label>Identifiant <input id="lUsername" autocomplete="username"></label>
+    <label>Mot de passe <input id="lPassword" type="password" autocomplete="new-password"></label>
+    <button class="btn" id="lSave">Ajouter</button><ul id="lAccounts" class="file-list"></ul></fieldset></div>`;
+}
+
+async function loadBrowserSettings() {
+  const s = await api("/api/settings/browser");
+  $("#bEngine").value = s.engine; $("#bExecutable").value = s.executable || ""; $("#bPort").value = s.cdp_port;
+  const found = s.system_browser, standard = s.default_browser;
+  $("#bDetected").textContent = !found ? "Aucun navigateur compatible trouvé : JobRadar utilisera son Chromium intégré."
+    : found.is_default ? `Navigateur utilisé : ${found.name} (ton navigateur par défaut).`
+    : standard ? `${standard} ne peut pas être piloté : JobRadar utilisera ${found.name}.`
+    : `Navigateur utilisé : ${found.name}.`;
+  const render = accounts => { $("#lAccounts").innerHTML = accounts.map(a => `<li class="file"><span>${esc(a.domain)} — ${esc(a.username)}</span><button class="btn sm ghost" data-domain="${esc(a.domain)}">Supprimer</button></li>`).join("") || `<li class="muted small">Aucun identifiant.</li>`;
+    $$("#lAccounts [data-domain]").forEach(b => b.onclick = async () => { await api(`/api/settings/logins/${encodeURIComponent(b.dataset.domain)}`, {method:"DELETE"}); loadBrowserSettings(); }); };
+  render(s.accounts);
+  $("#bSave").onclick = async () => { await api("/api/settings/browser", {method:"PUT", body:{engine:$("#bEngine").value, executable:$("#bExecutable").value, cdp_port:Number($("#bPort").value)}}); toast("Navigateur enregistré"); };
+  $("#bOpen").onclick = async () => {
+    const b = $("#bOpen"); b.disabled = true;
+    try { const r = await api("/api/settings/browser/open", {method:"POST"}); toast(`${r.name} ouvert : connecte-toi à tes comptes.`); }
+    catch (e) { toast(`Navigateur non ouvert : ${e.message}`, 5000); }
+    finally { b.disabled = false; }
+  };
+  $("#lSave").onclick = async () => { await api("/api/settings/logins", {method:"POST", body:{domain:$("#lDomain").value, username:$("#lUsername").value, password:$("#lPassword").value}}); $("#lPassword").value=""; loadBrowserSettings(); };
+}
 
 async function openEmailSettings() {
   let s;
@@ -2252,13 +2516,16 @@ async function openEmailSettings() {
       ${tabsHtml("set", SETTINGS_TABS, tab, "Sections des réglages")}
     </div>
     ${tabPanel("set", "email", tab, emailSettingsHtml())}
+    ${tabPanel("set", "browser", tab, browserSettingsHtml())}
     ${tabPanel("set", "archives", tab, archivesSettingsHtml())}`);
   bindTabs($(".settings-head .tabs"), k => {
     state.settingsTab = k;
     if (k === "archives") loadArchivesSettings();
+    if (k === "browser") loadBrowserSettings();
   });
   bindArchivesSettings();
   if (tab === "archives") loadArchivesSettings();
+  if (tab === "browser") loadBrowserSettings();
   fillEmailForm(s);
   $("#ePreset").onchange = () => {
     const p = EMAIL_PRESETS[$("#ePreset").value];
@@ -2499,7 +2766,7 @@ async function pollStatus() {
     state.wasRunning = true;
   } else if (state.wasRunning) {
     state.wasRunning = false;
-    if (mine) { await loadOffers(); loadSearches(); toast("Recherche terminée"); }
+    if (mine) { await loadOffers(); loadSearches(); loadAutoApply(); toast("Recherche terminée"); }
     loadNotifs(); // de nouvelles alertes ont pu être créées par l'actualisation
   }
 }
@@ -2522,7 +2789,14 @@ $("#runBtn").onclick = async () => {
   } catch (e) { toast(e.message, 5000); }
 };
 $("#logToggle").onclick = () => ($("#progressLog").hidden = !$("#progressLog").hidden);
-["#qText", "#qMin", "#qStatus", "#qSource", "#qSort", "#qZoneThr"].forEach(s => ($(s).oninput = renderOffers));
+$("#autoApplyNav").onclick = openAutoApply;
+$("#aaManage").onclick = openAutoApply;
+$("#aaRefresh").onclick = loadAutoApplyPage;
+$("#aaFilter").addEventListener("change", renderAutoApplyList);
+$("#aaRetryAll").onclick = async event => {
+  try { await retryAllAutoApply(event.currentTarget); } catch (e) { toast(e.message, 6000); }
+};
+["#qText", "#qMin", "#qStatus", "#qSource", "#qSort", "#qZoneThr", "#qNoNationality"].forEach(s => ($(s).oninput = renderOffers));
 $("#qZone").addEventListener("change", renderOffers);
 $$('[data-ai-provider]').forEach(select => select.addEventListener("change", changeAIProvider));
 
@@ -2538,6 +2812,8 @@ window.JobRadarUI = Object.freeze({
   } catch { state.aiLabel = "L'IA"; }
   loadNotifs();
   setInterval(loadNotifs, 5 * 6e4); // rappels d'entretien et de relance qui arrivent à échéance
+  loadAutoApplyPage(); // compteur « à reprendre » de la barre latérale
+  setInterval(loadAutoApplyPage, 2 * 6e4);
   await loadSearches();
   if (state.searches.length) openResults(state.searches[0].id);
   else showView("viewWelcome");

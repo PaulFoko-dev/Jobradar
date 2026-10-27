@@ -4,6 +4,7 @@
     python -m jobradar.cli refresh          # exécute toutes les recherches quotidiennes (pour le timer)
     python -m jobradar.cli refresh --id 3   # exécute une recherche précise
     python -m jobradar.cli backup           # sauvegarde ZIP dans data/sauvegardes/
+    python -m jobradar.cli navigateur       # ouvre le navigateur dédié aux connexions
 
 ``refresh`` entretient aussi les archives des candidatures : rattrapage des dossiers manquants,
 captures en attente et vérification (au plus quotidienne) des annonces retirées.
@@ -11,7 +12,7 @@ captures en attente et vérification (au plus quotidienne) des annonces retirée
 import argparse
 import logging
 
-from . import archive, config, db, export, notifications, pipeline
+from . import archive, config, db, export, notifications, pipeline, preparation
 from .config import settings
 
 
@@ -38,6 +39,7 @@ def main():
     r = sub.add_parser("refresh")
     r.add_argument("--id", type=int)
     sub.add_parser("backup", help="sauvegarde ZIP : base, configuration et archives des candidatures")
+    sub.add_parser("navigateur", help="ouvre le navigateur dédié aux candidatures")
     args = p.parse_args()
 
     db.init()
@@ -54,6 +56,14 @@ def main():
         result = export.backup()
         print(f"Sauvegarde créée : {config.DATA_DIR / 'sauvegardes' / result['path']} "
               f"({result['size_bytes'] / 1_000_000:.1f} Mo)")
+    elif args.cmd == "navigateur":
+        from . import application_browser
+        try:
+            browser = application_browser.open_system_browser()
+        except application_browser.BrowserUnavailable as exc:
+            p.error(str(exc))
+        print(f"{browser['name']} (profil JobRadar) est ouvert : connecte-toi une fois à tes comptes, "
+              "puis laisse JobRadar le réutiliser.")
     else:
         targets = [db.get_search(args.id)] if args.id else [
             s for s in db.list_searches() if s["frequency"] == "daily"
@@ -70,6 +80,11 @@ def main():
         # Un seul e-mail récapitulatif pour toutes les recherches de l'exécution.
         pipeline.log_email(notifications.deliver_email_digest(), print)
         maintain_archives()
+        # Sans serveur, les préparations (dont l'auto-candidature) sont faites ici ; les envois assistés
+        # qu'elles placent dans la file partiront au prochain démarrage du serveur.
+        prepared = preparation.run_pending()
+        if prepared:
+            print(f"Préparations de documents : {prepared} traitée(s)")
 
 
 if __name__ == "__main__":

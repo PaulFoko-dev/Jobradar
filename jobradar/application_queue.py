@@ -11,6 +11,22 @@ from . import db
 
 LOGGER = logging.getLogger(__name__)
 Handler = Callable[[dict], None]
+BROWSER_RETRY_DELAYS_S = (60, 180, 300)
+
+
+def _may_retry_browser(attempt: dict) -> bool:
+    previous = attempt.get("intervention") or {}
+    return not attempt.get("submit_clicked_at_utc") and previous.get("browser_retry_count", 0) < len(BROWSER_RETRY_DELAYS_S)
+
+
+def _retry_browser_later(attempt_id: int, retry_count: int) -> None:
+    try:
+        db.transition_application_attempt(attempt_id, expected={"needs_user"}, status="queued",
+                                          intervention={"kind": "browser_retry_started",
+                                                        "browser_retry_count": retry_count})
+    except (db.Conflict, db.NotFound):
+        return
+    wake()
 
 
 def _process(attempt: dict) -> None:
@@ -18,6 +34,18 @@ def _process(attempt: dict) -> None:
     try:
         application_browser.process(attempt)
     except application_browser.BrowserUnavailable as exc:
+        current = db.get_application_attempt(attempt["id"])
+        if _may_retry_browser(current):
+            retry_count = int((current.get("intervention") or {}).get("browser_retry_count", 0)) + 1
+            db.transition_application_attempt(attempt["id"], expected={"running"}, status="needs_user",
+                                              intervention={"kind": "browser_retry_scheduled",
+                                                            "browser_retry_count": retry_count,
+                                                            "message": f"{exc} Reprise {retry_count}/3 programmée."})
+            timer = threading.Timer(BROWSER_RETRY_DELAYS_S[retry_count - 1], _retry_browser_later,
+                                    [attempt["id"], retry_count])
+            timer.daemon = True
+            timer.start()
+            return
         intervention = {"kind": "browser_unavailable", "message": str(exc), "action": "manual_fallback"}
         updated = db.transition_application_attempt(
             attempt["id"], expected={"running"}, status="needs_user",
@@ -57,39 +85,47 @@ class ApplicationQueue:
         return not self._wake.unfinished_tasks
 
     def _work(self) -> None:
-        while not self._stop.is_set():
-            token = self._wake.get()
-            try:
-                if token is None or self._stop.is_set():
-                    continue
-                while not self._stop.is_set():
-                    attempt = db.claim_next_application_attempt()
-                    if attempt is None:
-                        break
-                    try:
-                        self._handler(attempt)
-                    except Exception as exc:
-                        LOGGER.exception("Candidature assistée %s : échec", attempt["id"])
+        try:
+            while not self._stop.is_set():
+                token = self._wake.get()
+                try:
+                    if token is None or self._stop.is_set():
+                        continue
+                    while not self._stop.is_set():
+                        attempt = db.claim_next_application_attempt()
+                        if attempt is None:
+                            break
                         try:
-                            from . import application_browser
-                            if application_browser.submit_was_clicked(attempt["id"]):
-                                # Le clic d'envoi a eu lieu : un « échec » inviterait à renvoyer un doublon.
-                                application_browser.submission_unconfirmed(attempt["id"])
-                                continue
-                            updated = db.transition_application_attempt(
-                                attempt["id"], expected={"running"}, status="failed",
-                                error=f"{type(exc).__name__}: {exc}"[:1000],
-                            )
-                            from . import notifications
-                            notifications.application_intervention(updated, {
-                                "kind": "unexpected_error",
-                                "message": "Le formulaire a changé ou une erreur imprévue est survenue.",
-                                "action": "manual_fallback",
-                            })
-                        except (db.Conflict, db.NotFound):
-                            pass
-            finally:
-                self._wake.task_done()
+                            self._handler(attempt)
+                        except Exception as exc:
+                            self._handle_failure(attempt, exc)
+                finally:
+                    self._wake.task_done()
+        finally:
+            from . import application_browser
+            application_browser.close_persistent_browser()
+
+    @staticmethod
+    def _handle_failure(attempt: dict, exc: Exception) -> None:
+        LOGGER.exception("Candidature assistée %s : échec", attempt["id"])
+        try:
+            from . import application_browser
+            if application_browser.submit_was_clicked(attempt["id"]):
+                # Le clic d'envoi a eu lieu : un « échec » inviterait à renvoyer un doublon.
+                application_browser.submission_unconfirmed(attempt["id"])
+                return
+            updated = db.transition_application_attempt(
+                attempt["id"], expected={"running"}, status="failed",
+                error=f"{type(exc).__name__}: {exc}"[:1000],
+            )
+            from . import notifications
+            notifications.application_intervention(updated, {
+                "kind": "unexpected_error",
+                "message": "Le formulaire a changé ou une erreur imprévue est survenue.",
+                "action": "manual_fallback",
+            })
+        except (db.Conflict, db.NotFound):
+            pass
 
 
 _QUEUE: ApplicationQueue | None = None

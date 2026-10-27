@@ -56,7 +56,12 @@ _MAX_ONLINE_BYTES = 2_000_000
 _BLOCKING_STATUSES = frozenset({401, 403, 429, 503})
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
-_WALL_URL_MARKERS = ("authwall", "/checkpoint/", "/cdn-cgi/challenge")
+_WALL_URL_MARKERS = ("authwall", "/checkpoint/", "/cdn-cgi/challenge", "bot-detection")
+# Redirection vers une page de connexion (secure.indeed.com/auth, /login, /signin…) : jamais l'adresse d'une offre.
+_LOGIN_URL = re.compile(
+    r"^https?://[^/]+/(?:[^?#]*/)?(?:auth|login|log-in|signin|sign-in|sso|connexion|identification)(?:[/;?#.]|$)",
+    re.IGNORECASE,
+)
 # Motifs cherchés dans le texte d'une page courte ; « captcha » seul y est trop fréquent (mention reCAPTCHA).
 _WALL_PATTERNS = (
     "just a moment",
@@ -72,6 +77,11 @@ _WALL_PATTERNS = (
     "acces refuse",
     "sign in to view",
     "connectez-vous pour voir",
+    "create an account or sign in",
+    "sign in to continue",
+    "log in to continue",
+    "connectez-vous ou creez un compte",
+    "connectez-vous pour continuer",
 )
 _WALL_TITLE_PATTERNS = (*_WALL_PATTERNS, "captcha", "un instant", "attention required")
 _EXPIRED_PATTERNS = (
@@ -190,13 +200,28 @@ def _contains_any(normalized_text: str, patterns: tuple[str, ...]) -> bool:
     return any(_normalize_text(pattern) in normalized_text for pattern in patterns)
 
 
-def _looks_like_wall(url: str, title: str, text: str) -> bool:
-    """Mur de connexion ou anti-robot : URL caractéristique, titre, ou page courte qui en parle."""
-    if any(marker in url.casefold() for marker in _WALL_URL_MARKERS):
+def _looks_like_wall(url: str, title: str, text: str, *, password_field: bool = False) -> bool:
+    """Mur de connexion ou anti-robot : URL caractéristique, titre, ou page courte qui en parle.
+
+    Une page courte portant un champ mot de passe est un formulaire de connexion, quelle que soit sa formulation
+    (Indeed : « Ready to take the next step? Create an account or sign in. »).
+    """
+    if any(marker in url.casefold() for marker in _WALL_URL_MARKERS) or _LOGIN_URL.match(url):
         return True
     if _contains_any(_normalize_text(title), _WALL_TITLE_PATTERNS):
         return True
-    return len(text) <= _WALL_MAX_TEXT_CHARS and _contains_any(_normalize_text(text), _WALL_PATTERNS)
+    if len(text) > _WALL_MAX_TEXT_CHARS:
+        return False
+    return password_field or _contains_any(_normalize_text(text), _WALL_PATTERNS)
+
+
+def pdf_shows_wall(pdf: bytes) -> bool:
+    """Copie déjà enregistrée qui ne montre qu'un mur (capturée avant que ce mur soit reconnu)."""
+    try:
+        text = " ".join(_pdf_text(pdf).split())
+    except Exception:
+        return False
+    return bool(text) and _looks_like_wall("", "", text)
 
 
 def _remaining_ms(deadline: float, *, ceiling_ms: int | None = None) -> int:
@@ -385,24 +410,32 @@ def _scroll_page(page: Page, deadline: float) -> None:
     page.evaluate("() => window.scrollTo(0, 0)")
 
 
-def _page_state(page: Page) -> tuple[str, str, str]:
-    """URL, titre et texte visibles ; vides si la page est en cours de navigation."""
+def _page_state(page: Page) -> tuple[str, str, str, bool]:
+    """URL, titre, texte visibles et présence d'un champ mot de passe ; vides si la page est en cours de navigation."""
     try:
-        return page.url, page.title(), page.locator("body").inner_text(timeout=3_000)
+        return (page.url, page.title(), page.locator("body").inner_text(timeout=3_000),
+                page.locator("input[type=password]").count() > 0)
     except Exception:
-        return page.url, "", ""
+        return page.url, "", "", False
+
+
+def _is_wall(state: tuple[str, str, str, bool]) -> bool:
+    url, title, text, password_field = state
+    return _looks_like_wall(url, title, text, password_field=password_field)
 
 
 def _wait_past_wall(page: Page, deadline: float, *, max_wait_ms: int) -> None:
-    """Laisse le temps à un contrôle anti-robot transitoire (Cloudflare…) de se résoudre."""
+    """Laisse le temps à un contrôle anti-robot transitoire (Cloudflare…), ou à une connexion dans la fenêtre
+    visible, de se résoudre."""
     limit = time.monotonic() + max_wait_ms / 1000
-    while _looks_like_wall(*_page_state(page)) and time.monotonic() < limit:
+    while _is_wall(_page_state(page)) and time.monotonic() < limit:
         page.wait_for_timeout(min(1_000, _remaining_ms(deadline)))
 
 
 def _validate_page(page: Page) -> None:
-    url, title, text = _page_state(page)
-    if _looks_like_wall(url, title, text):
+    state = _page_state(page)
+    text = state[2]
+    if _is_wall(state):
         raise _CaptureFailure("La page d'origine présente un mur de connexion ou un contrôle anti-robot.", blocked=True)
     if len("".join(text.split())) < _MIN_TEXT_CHARS:
         raise _CaptureFailure("La page d'origine est vide ou contient trop peu de texte.")
@@ -1158,6 +1191,7 @@ def is_offer_online(url: str, *, timeout_s: int = 20) -> bool | None:
     title, text = _visible_text(markup)
     if _contains_any(_normalize_text(f"{title} {text}"), _EXPIRED_PATTERNS):
         return False
-    if _looks_like_wall(final_url, title, text):
+    password_field = re.search(r"<input\b[^>]*\btype\s*=\s*[\"']?password", markup, re.IGNORECASE) is not None
+    if _looks_like_wall(final_url, title, text, password_field=password_field):
         return None
     return True

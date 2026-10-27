@@ -88,6 +88,9 @@ def invisible_browser(monkeypatch, tmp_path: Path):
     cv = tmp_path / "Camille_Durand_CV.pdf"
     cv.write_bytes(b"%PDF-1.4 CV de test")
     monkeypatch.setattr(application_browser, "sync_playwright", headless)
+    monkeypatch.setattr(application_browser.config, "browser_settings", lambda: {
+        "engine": "chromium", "executable": "", "cdp_port": 9333, "keep_open": False,
+    })
     monkeypatch.setattr(application_browser, "_headed_available", lambda: True)
     monkeypatch.setattr(application_browser, "_selected_files", lambda _attempt: {"cv": str(cv)})
     monkeypatch.setattr(capture, "is_offer_online", lambda _url, **_kw: True)

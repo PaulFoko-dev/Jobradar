@@ -263,7 +263,7 @@ def finalize_assisted_submission(attempt_id: int) -> dict:
                 tailoring.mark_sent(document_id)
 
     def mark_application() -> None:
-        if db.get_application(attempt["application_id"]).get("status") == "consultee":
+        if db.get_application(attempt["application_id"]).get("status") in {"consultee", "a_postuler"}:
             db.update_application(attempt["application_id"], {"status": "envoyee"})
 
     steps = (("documents", mark_documents), ("statut", mark_application),

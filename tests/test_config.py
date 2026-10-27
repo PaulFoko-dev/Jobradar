@@ -43,6 +43,8 @@ def test_reglages_par_defaut(data_dir: Path) -> None:
     assert (st.alert_min_score, st.alert_desktop) == (85, True)
     written = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
     assert written["alerts"] == {"min_score": 85, "desktop": True}
+    assert config.browser_settings()["keep_open"] is True
+    assert config.capture_profile_dir() != config.browser_profile_dir()
 
 
 def test_reglages_invalides_remplaces_par_les_valeurs_par_defaut(write_config) -> None:

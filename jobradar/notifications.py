@@ -45,6 +45,21 @@ def application_submitted(attempt: dict) -> dict | None:
     return created
 
 
+def auto_apply(job: dict, kind: str, message: str) -> dict | None:
+    """Auto-candidature arrêtée (``auto_apply_failed``) ou limitée aux documents (``auto_apply_manual``)."""
+    if kind not in {"auto_apply_failed", "auto_apply_manual"}:
+        raise ValueError("Type de notification d'auto-candidature inconnu.")
+    application = db.get_application(job["application_id"])
+    payload = {"application_id": application["id"], "job_id": job["id"],
+               "title": application.get("title"), "company": application.get("company"), "message": message}
+    with db.connect() as c:
+        created = _insert(c, kind, f"preparation:{job['id']}:{kind}", payload)
+    if created:
+        deliver_desktop([created], "Auto-candidature : documents prêts, envoi manuel requis."
+                        if kind == "auto_apply_manual" else "Auto-candidature arrêtée : ton intervention est requise.")
+    return created
+
+
 def notify(message: str, title: str = "JobRadar") -> bool:
     """Notification de bureau (Linux : notify-send ; macOS : osascript ; ailleurs : rien).
 

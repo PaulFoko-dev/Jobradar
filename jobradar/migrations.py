@@ -398,6 +398,45 @@ def _application_submit_guard(conn: sqlite3.Connection) -> None:
     _add_column(conn, "application_attempts", "submit_clicked_at_utc", "TEXT")
 
 
+def _preparation_jobs(conn: sqlite3.Connection) -> None:
+    """Préparations CV/lettre exécutées côté serveur et réglages d'auto-candidature par recherche.
+
+    Une préparation ne dépend plus de la page qui l'a demandée : fermer la fenêtre ne perd rien.
+    ``offers.auto_apply_at_utc`` marque une offre déjà confiée à l'auto-candidature : supprimer la
+    candidature créée ne la fait jamais repartir.
+    """
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS preparation_jobs (
+            id INTEGER PRIMARY KEY,
+            application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            origin TEXT NOT NULL CHECK (origin IN ('manual', 'auto')),
+            params_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed')),
+            step TEXT,
+            session_id TEXT,
+            result_json TEXT,
+            attempt_id INTEGER REFERENCES application_attempts(id) ON DELETE SET NULL,
+            error TEXT,
+            created_at_utc TEXT NOT NULL,
+            started_at_utc TEXT,
+            finished_at_utc TEXT,
+            consumed_at_utc TEXT
+        )"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_preparation_jobs_queue
+           ON preparation_jobs(status, created_at_utc, id)"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_preparation_jobs_application
+           ON preparation_jobs(application_id, id DESC)"""
+    )
+    _add_column(conn, "searches", "auto_apply_enabled", "INTEGER NOT NULL DEFAULT 0")
+    _add_column(conn, "searches", "auto_apply_min_score", "INTEGER NOT NULL DEFAULT 85")
+    _add_column(conn, "searches", "auto_apply_daily_limit", "INTEGER NOT NULL DEFAULT 10")
+    _add_column(conn, "offers", "auto_apply_at_utc", "TEXT")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, _create_initial_schema),
     (2, _add_logo_columns),
@@ -414,6 +453,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (13, _application_review_policy),
     (14, _interview_progression),
     (15, _application_submit_guard),
+    (16, _preparation_jobs),
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]
 

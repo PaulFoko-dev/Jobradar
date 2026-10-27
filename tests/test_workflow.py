@@ -11,6 +11,7 @@ from jobradar.workflow import (
     deadline_status,
     follow_up_status,
     is_urgent,
+    nationality_requirement,
     normalize_company,
     priority,
     validate_http_url,
@@ -218,3 +219,25 @@ def test_validation_url_http(url: str) -> None:
 def test_validation_url_refuse_les_valeurs_dangereuses(url: str) -> None:
     with pytest.raises(ValueError):
         validate_http_url(url)
+
+
+@pytest.mark.parametrize("text", [
+    "Poste ouvert aux candidats de nationalité française uniquement.",
+    "Être ressortissant de l'Union européenne.",
+    "Vous êtes de nationalité française ou d’un État membre de l’UE.",
+    "Must be an EU citizen.",
+    "French nationality is required due to security clearance.",
+])
+def test_nationality_requirement_is_detected(text):
+    assert nationality_requirement("Stage SOC à Paris.\n" + text) == text
+
+
+@pytest.mark.parametrize("text", [
+    "Nationalité française ou titre de séjour valide.",
+    "Aucune condition de nationalité.",
+    "Rejoignez une équipe internationale de 20 nationalités.",
+    "",
+    None,
+])
+def test_nationality_requirement_ignores_open_offers(text):
+    assert nationality_requirement(text) is None

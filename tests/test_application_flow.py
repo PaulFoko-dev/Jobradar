@@ -29,7 +29,7 @@ def _ready_document(application_id: int, kind: str = "cv", version: int = 1) -> 
 
 def test_migration_13_creates_application_attempts_and_review_policy(data_dir) -> None:
     with db.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION == 15
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == LATEST_SCHEMA_VERSION == 16
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(application_attempts)")}
     assert {"application_id", "mode", "status", "cv_document_id", "letter_document_id",
             "target_url", "provider", "answers_json", "intervention_json", "submitted_at_utc",

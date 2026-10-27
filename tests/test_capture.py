@@ -144,7 +144,7 @@ def test_capture_refuse_le_bandeau_cookies_avant_de_valider_la_page(
     assert result.png_path is not None
 
 
-@pytest.mark.parametrize("fixture_name", ["vide.html", "mur.html"])
+@pytest.mark.parametrize("fixture_name", ["vide.html", "mur.html", "connexion.html"])
 @requires_browser
 def test_page_vide_ou_mur_descend_vers_la_copie_reconstituee(
     fixture_server: tuple[str, list[str]], tmp_path: Path, offer: dict, fixture_name: str
@@ -584,10 +584,24 @@ def test_dest_dir_relatif_est_une_erreur_de_programmation(tmp_path: Path, offer:
         ("https://example.test/offre", "Offre", "Vérifiez que vous êtes humain.", True),
         ("https://example.test/offre", "Offre", "Description. " * 300 + "Protected by reCAPTCHA.", False),
         ("https://example.test/offre", "Offre", "Offre courte. Protected by reCAPTCHA.", False),
+        ("https://secure.indeed.com/auth;jsessionid=x?continue=y", "Indeed", "", True),
+        ("https://fr.indeed.com/viewjob?jk=1&from=bot-detection-anonymous", "Offre", "x" * 5_000, True),
+        ("https://example.test/users/sign-in?next=/offre", "Offre", "x" * 5_000, True),
+        ("https://example.test/login", "Offre", "x" * 5_000, True),
+        ("https://example.test/offres/stage-authentification-forte", "Offre", "x" * 5_000, False),
+        ("https://example.test/offre", "Offre", "Ready to take the next step? Create an account or sign in.", True),
     ],
 )
 def test_detection_des_murs(url: str, title: str, text: str, expected: bool) -> None:
     assert capture._looks_like_wall(url, title, text) is expected
+
+
+def test_formulaire_de_connexion_reconnu_a_son_champ_mot_de_passe() -> None:
+    text = "Prêt pour la suite ? Adresse e-mail Mot de passe Continuer"
+    assert capture._looks_like_wall("https://example.test/offre", "Offre", text, password_field=True)
+    assert not capture._looks_like_wall("https://example.test/offre", "Offre", text)
+    # Une vraie offre peut proposer la connexion dans son en-tête : seule une page courte est un mur.
+    assert not capture._looks_like_wall("https://example.test/offre", "Offre", "x" * 5_000, password_field=True)
 
 
 def _install_mock_transport(monkeypatch: pytest.MonkeyPatch, handler) -> list[httpx.Request]:
@@ -636,6 +650,12 @@ def test_is_offer_online_suit_les_redirections_et_envoie_un_user_agent(monkeypat
     assert capture.is_offer_online("https://example.test/depart") is True
     assert [request.url.path for request in requests] == ["/depart", "/offre"]
     assert "Mozilla" in requests[0].headers["User-Agent"]
+
+
+def test_is_offer_online_reste_indetermine_sur_un_formulaire_de_connexion(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = '<form>Adresse e-mail <input type="email"> <input type=password> Continuer</form>'
+    _install_mock_transport(monkeypatch, lambda _request: httpx.Response(200, text=body))
+    assert capture.is_offer_online("https://example.test/offre") is None
 
 
 @pytest.mark.parametrize("status_code", [403, 429, 500, 503])
