@@ -160,7 +160,9 @@ def eligible_offers(search: dict) -> list[dict]:
 def _recent_item(raw: dict) -> dict:
     item = view(raw)
     attempt = db.get_application_attempt(raw["attempt_id"]) if raw.get("attempt_id") else None
-    item.update(attempt=attempt, proofs={}, supervision=None, resumable=resumable(attempt))
+    sent = application_flow.already_sent(raw["application_id"])
+    item.update(attempt=attempt, proofs={}, supervision=None, sent_by_hand=sent and attempt is not None
+                and attempt["status"] != "submitted", resumable=not sent and resumable(attempt))
     try:
         proof = archive.directory_of(raw["application_id"]) / "envoi"
     except db.NotFound:  # archive absente ou déplacée : l'état reste affichable, sans preuves

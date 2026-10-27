@@ -35,3 +35,11 @@ def test_profile_import_is_bounded_and_responsive() -> None:
     assert "ACCEPTED" in source and "readBase64(file)" in source
     assert "esc(source.filename)" in source and "CSS.escape(conflict.id)" in source
     assert "@media (max-width: 640px)" in style
+
+
+def test_interface_is_revalidated_after_an_update(client) -> None:
+    page = client.get("/")
+    script = client.get("/static/profile-ui.js")
+    assert page.headers["cache-control"] == script.headers["cache-control"] == "no-cache"
+    assert "LINK_FIELDS" in script.text and 'name="link-${label}"' in script.text
+    assert client.get("/static/profile-ui.js", headers={"if-none-match": script.headers["etag"]}).status_code == 304

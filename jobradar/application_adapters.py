@@ -411,12 +411,13 @@ def _css_string(value: str) -> str:
 def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *, ai_metadata: bool = False) -> dict:
     """Associe les faits locaux aux champs ; toute ambiguïté obligatoire devient une intervention."""
     identity = candidate.get("identity") if isinstance(candidate.get("identity"), dict) else {}
+    links = [str(link.get("url") if isinstance(link, dict) else link) for link in identity.get("links") or []]
     known = [
-        # LinkedIn d'abord : « LinkedIn username » ne doit pas recevoir le nom complet.
-        (("linkedin",), next((str(link.get("url") if isinstance(link, dict) else link)
-                              for link in identity.get("links") or []
-                              if "linkedin" in str(link.get("url") if isinstance(link, dict) else link).casefold()),
-                             None)),
+        # Liens d'abord : « LinkedIn username » ou « Portfolio name » ne doivent pas recevoir le nom complet.
+        (("linkedin",), next((url for url in links if "linkedin" in url.casefold()), None)),
+        (("github",), next((url for url in links if "github" in url.casefold()), None)),
+        (("portfolio", "site web", "site internet", "website", "personal site", "personal url"),
+         next((url for url in links if url and not any(n in url.casefold() for n in ("linkedin", "github"))), None)),
         (("first name", "prenom", "given name"), _first_name(identity.get("full_name"))),
         (("last name", "nom de famille", "family name", "surname"), _last_name(identity.get("full_name"))),
         (("full name", "name", "nom complet"), identity.get("full_name")),

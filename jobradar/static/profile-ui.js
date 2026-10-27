@@ -12,9 +12,27 @@
     experiences: "Expériences", projects: "Projets", education: "Formation",
     certifications: "Certifications", skills: "Compétences", languages: "Langues",
   };
+  const LINK_FIELDS = [["LinkedIn", "https://www.linkedin.com/in/ton-profil"], ["GitHub", "https://github.com/ton-compte"],
+    ["Portfolio", "https://ton-site.fr"]];
   let current = null;
   let versions = [];
   let busy = false;
+
+  // Même classement que le serveur (profile._link_label) : LinkedIn, GitHub, sinon Portfolio.
+  function linkLabel(link) {
+    const url = String(link?.url || link || "").toLowerCase();
+    return url.includes("linkedin") ? "LinkedIn" : url.includes("github") ? "GitHub" : "Portfolio";
+  }
+
+  function linkOf(identity, label) {
+    return (identity.links || []).find(link => linkLabel(link) === label)?.url || "";
+  }
+
+  function normaliseUrl(value) {
+    const url = value.trim();
+    if (!url) return "";
+    return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  }
 
   function values(item) {
     const title = item.title || item.name || item.degree || item.label || "Élément sans titre";
@@ -95,6 +113,7 @@
             <label class="field"><span>E-mail</span><input name="email" type="email" value="${esc(identity.email)}"></label>
             <label class="field"><span>Téléphone</span><input name="phone" value="${esc(identity.phone)}"></label>
             <label class="field"><span>Ville</span><input name="city" value="${esc(identity.city)}"></label>
+            ${LINK_FIELDS.map(([label, placeholder]) => `<label class="field"><span>${label}</span><input name="link-${label}" type="url" inputmode="url" placeholder="${placeholder}" value="${esc(linkOf(identity, label))}"></label>`).join("")}
           </div><label class="field"><span>Titre professionnel</span><input name="headline" value="${esc(current.headline)}"></label>
           <label class="field"><span>Résumé</span><textarea name="summary" rows="5">${esc(current.summary)}</textarea></label></form>
         </section>
@@ -157,6 +176,14 @@
     document.querySelector("#profileSave").onclick = event => runOnce(event.currentTarget, async () => {
       const form = document.querySelector("#profileIdentity");
       const identity = Object.fromEntries(["full_name", "email", "phone", "city"].map(key => [key, form.elements[key].value.trim()]));
+      // Seul le lien affiché dans chaque champ est remplacé ; les autres liens importés sont conservés.
+      const links = current.identity.links || [];
+      const shown = new Set(LINK_FIELDS.map(([label]) => links.find(link => linkLabel(link) === label)).filter(Boolean));
+      identity.links = [
+        ...links.filter(link => !shown.has(link)),
+        ...LINK_FIELDS.map(([label]) => [label, normaliseUrl(form.elements[`link-${label}`].value)])
+          .filter(([, url]) => url).map(([label, url]) => ({ label, url })),
+      ];
       current = await api("/api/profile", { method: "PUT", body: { identity, headline: form.elements.headline.value.trim(), summary: form.elements.summary.value.trim() } });
       versions = await api("/api/profile/versions");
       toast("Profil enregistré"); render();

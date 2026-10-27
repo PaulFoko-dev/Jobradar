@@ -464,6 +464,7 @@ function autoApplyStepLabel(job) {
 function autoApplyResult(job) {
   const attempt = job.attempt;
   const reason = attempt?.intervention?.message || job.error || "";
+  if (job.sent_by_hand) return "Envoyée par toi ✓ (marquée dans le suivi)";
   if (!attempt) return job.status === "failed" ? `Préparation arrêtée : ${reason}` : "Préparation en cours…";
   if (attempt.status === "submitted") return "Envoyée ✓";
   if (attempt.status === "needs_user") return `À finir toi-même : ${reason}`;
@@ -474,7 +475,7 @@ function autoApplyResult(job) {
 
 function autoApplyGroup(job) {
   const attempt = job.attempt;
-  if (attempt?.status === "submitted") return "sent";
+  if (attempt?.status === "submitted" || job.sent_by_hand) return "sent";
   if (["queued", "running"].includes(job.status) || ["queued", "running"].includes(attempt?.status)) return "running";
   return "todo";
 }

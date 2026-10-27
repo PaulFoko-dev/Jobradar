@@ -474,6 +474,11 @@ def process(attempt: dict) -> None:
         return
     if not _headed_available():
         raise BrowserUnavailable("Aucune session graphique n'est disponible pour le navigateur de candidature.")
+    from . import application_flow  # évite une dépendance circulaire au chargement
+    if application_flow.already_sent(attempt["application_id"]):
+        # Envoyée à la main entre-temps : relancer le robot risquerait un doublon.
+        db.transition_application_attempt(attempt["id"], expected={"queued", "running"}, status="cancelled")
+        return
     candidate, files = profile.load_profile(), _selected_files(attempt)
     if "cv" not in files:
         _intervention(attempt["id"], "missing_document", "Le fichier CV sélectionné est introuvable.")
@@ -526,7 +531,6 @@ def process(attempt: dict) -> None:
     finally:
         browser_lock.release()
     if outcome == "submitted":
-        from . import application_flow  # évite une dépendance circulaire au chargement
         application_flow.finalize_assisted_submission(attempt["id"])
 
 

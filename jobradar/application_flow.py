@@ -157,7 +157,15 @@ def cancel(attempt_id: int) -> dict:
     )
 
 
+def already_sent(application_id: int) -> bool:
+    """Candidature envoyée (par le robot ou à la main) ou abandonnée : plus rien à envoyer."""
+    status = db.get_application(application_id).get("status")
+    return status in workflow.SENT_STATUSES or status == "abandon"
+
+
 def retry(attempt_id: int) -> dict:
+    if already_sent(db.get_application_attempt(attempt_id)["application_id"]):
+        raise db.Conflict("Cette candidature est déjà envoyée ou abandonnée : elle ne sera pas relancée.")
     attempt = db.transition_application_attempt(
         attempt_id, expected={"needs_user", "failed"}, status="queued"
     )

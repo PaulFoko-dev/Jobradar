@@ -184,6 +184,8 @@ def profile_values(candidate: dict) -> dict[str, str]:
             values["linkedin"] = url
         elif isinstance(url, str) and "github" in url.casefold():
             values["github"] = url
+        elif isinstance(url, str) and url:
+            values.setdefault("website", url)  # portfolio ou site personnel
     education = [item for item in candidate.get("education") or [] if isinstance(item, dict)]
     if education:
         values |= {"school": education[0].get("school"), "degree": education[0].get("degree"),

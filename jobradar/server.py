@@ -1144,9 +1144,21 @@ def delete_login(domain: str):
     return {"ok": True}
 
 
+# « no-cache » : le navigateur revalide (ETag) à chaque chargement, donc une mise à jour de
+# l'interface est visible dès le redémarrage, sans rechargement forcé.
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.update(NO_CACHE)
+        return response
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(STATIC / "index.html", headers=NO_CACHE)
 
 
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.mount("/static", RevalidatedStaticFiles(directory=STATIC), name="static")

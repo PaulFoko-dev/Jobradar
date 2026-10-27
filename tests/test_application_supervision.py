@@ -185,8 +185,12 @@ def test_documents_complete_the_profile_without_overriding_it() -> None:
     assert candidate["identity"]["links"] == [{"label": "Linkedin", "url": "https://linkedin.com/in/paul-foko"}]
     assert values["full_name"] == "Paul FOKO" and values["linkedin"] == "https://linkedin.com/in/paul-foko"
     assert (values["country"], values["phone_country_code"], values["phone_national"]) == ("France", "+33", "0763956780")
-    plan = fill_plan([Field("#li", "linkedin", "LinkedIn profile", "text", True)], candidate, {})
-    assert plan["values"][0]["value"] == "https://linkedin.com/in/paul-foko" and not plan["interventions"]
+    candidate["identity"]["links"].append({"label": "Portfolio", "url": "https://paul-foko.fr"})
+    plan = fill_plan([Field("#li", "linkedin", "LinkedIn profile", "text", True),
+                      Field("#web", "website", "Portfolio / Site web", "text", False)], candidate, {})
+    assert [item["value"] for item in plan["values"]] == ["https://linkedin.com/in/paul-foko", "https://paul-foko.fr"]
+    assert not plan["interventions"]
+    assert application_supervisor.profile_values(candidate)["website"] == "https://paul-foko.fr"
 
 
 def test_long_country_lists_show_the_options_matching_the_profile(monkeypatch) -> None:

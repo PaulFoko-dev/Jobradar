@@ -300,3 +300,26 @@ def test_page_dediee_liste_toutes_les_recherches_et_reprend_les_arrets(client, s
     assert db.get_application_attempt(closed)["status"] == "needs_user"
     assert db.get_application_attempt(clicked)["status"] == "needs_user"
     assert client.post("/api/auto-apply/retry").json() == {"retried": 0}
+
+
+def test_candidature_envoyee_a_la_main_n_est_jamais_relancee(client, search_id, make_offer, monkeypatch):
+    from jobradar import application_queue
+    monkeypatch.setattr(application_queue, "wake", lambda: None)
+    application = _application(make_offer)
+    job = db.create_preparation_job(application["id"], origin="auto", params={})
+    document = db.create_document(application["id"], "cv", 1, {"kind": "cv"}, {},
+                                  {"readability": 100, "ready": True}, [])
+    db.set_document_status(document["id"], "pret")
+    attempt = db.create_application_attempt(application["id"], mode="assisted", status="running",
+                                            cv_document_id=document["id"], letter_document_id=None,
+                                            target_url="https://exemple.test/offre", provider="generic")
+    db.transition_application_attempt(attempt["id"], expected={"running"}, status="needs_user",
+                                      intervention={"kind": "not_application_form", "message": "Formulaire"})
+    db.update_preparation_job(job["id"], status="done", step="queued_for_submission", attempt_id=attempt["id"])
+    db.update_application(application["id"], {"status": "envoyee"})
+
+    (item,) = client.get("/api/auto-apply").json()["recent"]
+    assert item["sent_by_hand"] and not item["resumable"]
+    assert client.post("/api/auto-apply/retry").json() == {"retried": 0}
+    assert client.post(f"/api/application-attempts/{attempt['id']}/retry").status_code == 409
+    assert db.get_application_attempt(attempt["id"])["status"] == "needs_user"
