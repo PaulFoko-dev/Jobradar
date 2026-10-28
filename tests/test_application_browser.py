@@ -54,6 +54,33 @@ def test_verification_detects_a_value_changed_by_the_page() -> None:
     assert issues == [{"label": "Réponse", "reason": "valeur relue différente"}]
 
 
+def test_fill_continues_when_one_dynamic_field_disappears() -> None:
+    class Locator:
+        first = None
+
+        def __init__(self, selector):
+            self.selector = selector
+            self.first = self
+
+        def fill(self, _value):
+            if self.selector == "[name=gone]":
+                raise application_browser.PlaywrightError("detached from DOM")
+
+        def evaluate(self, _script):
+            return None
+
+    class Root:
+        def locator(self, selector):
+            return Locator(selector)
+
+    monkey_plan = {"values": [
+        {"selector": "[name=gone]", "kind": "text", "value": "A", "label": "Champ disparu"},
+        {"selector": "[name=ok]", "kind": "text", "value": "B", "label": "Champ suivant"},
+    ]}
+    issues = application_browser._fill(Root(), monkey_plan)
+    assert issues == [{"label": "Champ disparu", "reason": "remplissage impossible"}]
+
+
 @pytest.mark.parametrize(("label", "is_final"), [
     ("Suivant", False), ("Save and continue", False), ("Envoyer ma candidature", True), ("Submit", True),
 ])

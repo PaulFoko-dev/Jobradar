@@ -288,34 +288,47 @@ def _settle(page) -> None:
 FILL_ORDER = {"select": 0, "listbox": 0, "radio": 1}  # une liste (pays…) peut reconstruire ou vider les champs suivants
 
 
-def _fill(root, plan: dict) -> None:
+def _fill(root, plan: dict) -> list[dict]:
+    """Remplit ce qui est possible sans laisser un widget instable arrêter toute la session.
+
+    La vérification DOM qui suit reste l'autorité : toute valeur absente ou différente
+    bloque l'envoi et est présentée à l'utilisateur comme intervention ciblée.
+    """
     _retag(root, plan)
+    issues = []
     for item in sorted(plan["values"], key=lambda item: FILL_ORDER.get(item["kind"], 2)):
         locator = root.locator(item["selector"]).first
-        if item["kind"] == "file":
-            locator.set_input_files(item["value"])
-        elif item["kind"] == "checkbox":
-            try:
+        try:
+            if item["kind"] == "file":
+                locator.set_input_files(item["value"])
+            elif item["kind"] == "checkbox":
                 locator.set_checked(bool(item["value"]), timeout=5_000)
-            except PlaywrightError:
-                # Case stylée (input caché sous un dessin) : l'événement est remis à la case elle-même.
-                if locator.is_enabled() and locator.is_checked() != bool(item["value"]):
-                    locator.dispatch_event("click")
-        elif item["kind"] == "select":
-            locator.select_option(label=item["value"])
-        elif item["kind"] == "listbox":
-            locator.click(timeout=5_000)
-            option = root.page.get_by_role("option", name=str(item["value"]), exact=True)
-            option.first.click(timeout=5_000)
-            root.page.wait_for_timeout(300)
-        elif item["kind"] == "radio":
-            # Le plan contient le libellé visible validé par l'utilisateur,
-            # jamais une valeur interne opaque propre au site.
-            root.get_by_label(item["value"], exact=True).check()
-        else:
-            locator.fill(item["value"])
-            # Quitter le champ comme une personne : le site revalide et retire son ancien message d'erreur.
-            locator.evaluate("el => el.blur()")
+            elif item["kind"] == "select":
+                locator.select_option(label=item["value"])
+            elif item["kind"] == "listbox":
+                locator.click(timeout=5_000)
+                option = root.page.get_by_role("option", name=str(item["value"]), exact=True)
+                option.first.click(timeout=5_000)
+                root.page.wait_for_timeout(300)
+            elif item["kind"] == "radio":
+                # Le plan contient le libellé visible validé par l'utilisateur,
+                # jamais une valeur interne opaque propre au site.
+                root.get_by_label(item["value"], exact=True).check()
+            else:
+                locator.fill(item["value"])
+                # Quitter le champ comme une personne : le site revalide et retire son ancien message d'erreur.
+                locator.evaluate("el => el.blur()")
+        except PlaywrightError:
+            if item["kind"] == "checkbox":
+                try:
+                    # Case stylée (input caché sous un dessin) : cliquer directement sur l'input.
+                    if locator.is_enabled() and locator.is_checked() != bool(item["value"]):
+                        locator.dispatch_event("click")
+                        continue
+                except PlaywrightError:
+                    pass
+            issues.append({"label": item["label"], "reason": "remplissage impossible"})
+    return issues
 
 
 def _verify_filled(root, plan: dict) -> list[dict]:
