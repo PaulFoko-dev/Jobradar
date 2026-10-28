@@ -282,7 +282,7 @@ def test_prompt_improves_rendered_cv_as_a_new_controlled_version(client, fake_re
 
     def revised(*_args, **_kwargs):
         return {"composition": {
-            "headline": "Analyste SOC", "summary": "",
+            "headline": "Analyste SOC", "summary": "Profil orienté analyse de sécurité",
             "sections": [
                 {"type": "experience", "title": "Expérience professionnelle", "groups": [],
                  "items": [{"ref": "exp-1", "bullets": [

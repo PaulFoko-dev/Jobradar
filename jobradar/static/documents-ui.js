@@ -403,7 +403,9 @@
         });
         toast(`Version ${result.documents?.[0]?.version || "améliorée"} créée et contrôlée`);
         await renderDocumentsTab(application, [], true);
-      }).catch(() => {});
+      }).catch(error => {
+        toast(error.message || "La régénération a échoué.", 7000);
+      });
     }));
     qa("[data-ready]", host).forEach(button => button.addEventListener("click", () => {
       if (!window.confirm("Le contrôle ATS est réussi. Marquer ce document comme prêt à envoyer ?")) return;

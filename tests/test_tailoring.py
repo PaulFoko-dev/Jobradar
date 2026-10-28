@@ -250,6 +250,26 @@ def test_refine_masks_instruction_preserves_source_and_revalidates(assistant, ap
     assert result["composition"]["summary"] == "Profil orienté analyse de sécurité"
 
 
+def test_refine_retries_when_only_typography_changed(assistant, application):
+    calls, replies = assistant
+    replies.append(tailored(letter=valid_letter()))
+    prepared = tailoring.prepare(application["id"], kinds=["lettre"])
+    typography_only = valid_letter() | {
+        "paragraphs": [paragraph.replace("'", "’") for paragraph in valid_letter()["paragraphs"]],
+    }
+    changed = valid_letter() | {"paragraphs": ["Je souhaite contribuer aux missions de votre équipe.",
+                                                "Chez Acme, j'ai analysé 20 alertes avec Splunk."]}
+    replies += [tailored(composition=None, letter=typography_only), tailored(composition=None, letter=changed)]
+
+    result = tailoring.refine(application["id"], {
+        "session": prepared["session"], "instruction": "Rends la lettre plus directe.",
+    })
+
+    assert len(calls) == 3 and "CORRECTION OBLIGATOIRE" in calls[-1]["prompt"]
+    assert result["letter"]["paragraphs"][0].startswith("Je souhaite contribuer")
+    assert any("première révision était inchangée" in note for note in result["notes"])
+
+
 def test_refine_rejects_tampered_current_preview_before_calling_ai(assistant, application):
     calls, replies = assistant
     replies.append(tailored())
@@ -373,6 +393,25 @@ def test_invalid_ai_letter_is_corrected_instead_of_silently_discarded(assistant,
     assert result["letter"] is not None
     assert len(calls) == 2 and "CORRECTION OBLIGATOIRE DE LA LETTRE" in calls[1]["prompt"]
     assert any("corrigée automatiquement" in note for note in result["notes"])
+
+
+def test_invalid_refined_letter_is_corrected_instead_of_returning_400(assistant, application):
+    calls, replies = assistant
+    replies.append(tailored(letter=valid_letter()))
+    prepared = tailoring.prepare(application["id"], kinds=["cv", "lettre"])
+    invalid = valid_letter() | {"paragraphs": ["Microsoft Sentinel me passionne.",
+                                                "Chez Acme, j'ai analysé 20 alertes avec Splunk."]}
+    concise = valid_letter() | {"paragraphs": ["Chez Acme, j'ai analysé 20 alertes avec Splunk."]}
+    replies += [tailored(letter=invalid), tailored(composition=None, letter=valid_letter()),
+                tailored(composition=None, letter=concise)]
+
+    result = tailoring.refine(application["id"], {
+        "session": prepared["session"], "instruction": "Rends la lettre plus concise.",
+    })
+
+    assert result["letter"]["paragraphs"] == concise["paragraphs"]
+    assert "CORRECTION OBLIGATOIRE" in calls[-1]["prompt"]
+    assert any("première révision était inchangée" in note for note in result["notes"])
 
 
 def test_prompt_lists_offer_terms_absent_from_profile(assistant, application):

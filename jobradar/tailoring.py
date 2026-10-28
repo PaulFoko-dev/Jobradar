@@ -1176,6 +1176,19 @@ def answer(application_id: int, body: dict) -> dict:
     return {"session": session["id"], "composition": composition, "letter": letter, "questions": questions}
 
 
+CV_VISIBLE_FIELDS = ("headline", "summary", "sections")
+LETTER_VISIBLE_FIELDS = ("subject", "greeting", "paragraphs", "closing", "recipient")
+_TYPOGRAPHY = str.maketrans({"’": "'", "‘": "'", "–": "-", "—": "-"})
+
+
+def _visible_signature(document: dict | None, fields: tuple[str, ...]) -> str:
+    """Texte visible d'un document, sans les variations de typographie ni d'accents."""
+    if document is None:
+        return ""
+    visible = {field: document.get(field) for field in fields}
+    return profile.fold(json.dumps(visible, ensure_ascii=False, sort_keys=True).translate(_TYPOGRAPHY))
+
+
 def refine(application_id: int, body: dict) -> dict:
     """Révise la proposition selon une consigne libre, puis réapplique toutes les règles anti-invention."""
     if not isinstance(body, dict):
@@ -1206,6 +1219,10 @@ def refine(application_id: int, body: dict) -> dict:
             profile.mask_data({"composition": current_cv, "letter": current_letter}, data["identity"]),
             ensure_ascii=False, indent=1),
     ])
+    if body.get("_retry_unchanged") is True:
+        prompt += ("\n\nCORRECTION OBLIGATOIRE : la première révision ne modifiait pas réellement le document "
+                   "(seule la ponctuation ou la typographie changeait). Applique maintenant la consigne de façon "
+                   "substantielle, tout en respectant strictement les faits du profil.")
     result = ai.ask_ai(prompt, TAILORING_SCHEMA, "tailoring")
     if not isinstance(result, dict):
         raise CompositionError("L'assistant a renvoyé une révision invalide.")
@@ -1230,7 +1247,51 @@ def refine(application_id: int, body: dict) -> dict:
         letter = _assemble_letter(raw, language=current_letter["language"],
                                   base_id=current_letter.get("base_source_id"), template=current_letter.get("template"),
                                   offer=session["offer"])
-        letter = validate_letter(letter, data, session["offer_keywords"], session["offer"])
+        notes += _repair_letter_refs(letter, ctx)
+        problem = _attempt(validate_letter, letter, data, session["offer_keywords"], session["offer"])
+        if problem:
+            correction_prompt = "\n\n".join([
+                prompt,
+                "CORRECTION OBLIGATOIRE DE LA LETTRE RÉVISÉE : la proposition a été refusée : " + problem,
+                "Retourne la révision demandée sans aucun fait ni terme absent du PROFIL. Conserve le même modèle, "
+                "la même langue et l'intention de la consigne. `composition` peut être null.",
+                *([_forbidden_rule(_forbidden_terms(ctx))] if _forbidden_terms(ctx) else []),
+            ])
+            corrected = ai.ask_ai(correction_prompt, TAILORING_SCHEMA, "tailoring")
+            corrected = profile.unmask_data(corrected, data["identity"]) if isinstance(corrected, dict) else {}
+            raw = corrected.get("letter")
+            if not isinstance(raw, dict):
+                raise CompositionError("La lettre révisée n'a pas pu être corrigée sans inventer d'information.")
+            letter = _assemble_letter(raw, language=current_letter["language"],
+                                      base_id=current_letter.get("base_source_id"),
+                                      template=current_letter.get("template"), offer=session["offer"])
+            notes += _repair_letter_refs(letter, ctx)
+            second_problem = _attempt(validate_letter, letter, data, session["offer_keywords"], session["offer"])
+            if second_problem:
+                dropped = _drop_forbidden_sentences(letter, ctx)
+                if dropped and not _attempt(validate_letter, letter, data, session["offer_keywords"], session["offer"]):
+                    notes += dropped
+                    second_problem = None
+            if second_problem:
+                raise CompositionError("La lettre révisée reste invalide après correction : " + second_problem)
+            notes.append("La première révision de la lettre a été refusée puis corrigée automatiquement.")
+        else:
+            letter = validate_letter(letter, data, session["offer_keywords"], session["offer"])
+    # Une nouvelle version identique, à quelques apostrophes ou accents près,
+    # n'est pas une régénération utile. On redemande une fois une vraie
+    # modification, puis on échoue clairement au lieu d'archiver un doublon.
+    unchanged = ((current_cv is None or _visible_signature(composition, CV_VISIBLE_FIELDS)
+                  == _visible_signature(current_cv, CV_VISIBLE_FIELDS))
+                 and (current_letter is None or _visible_signature(letter, LETTER_VISIBLE_FIELDS)
+                      == _visible_signature(current_letter, LETTER_VISIBLE_FIELDS)))
+    if unchanged:
+        if body.get("_retry_unchanged") is True:
+            raise CompositionError("La consigne n'a produit aucune modification réelle après deux tentatives : "
+                                   "elle demande peut-être une information absente du profil. Reformule-la ou "
+                                   "complète d'abord le profil.")
+        return refine(application_id, body | {"_retry_unchanged": True})
+    if body.get("_retry_unchanged") is True:
+        notes.append("La première révision était inchangée ; une seconde génération a été appliquée automatiquement.")
     session.update({"composition": composition, "letter": letter, "notes": notes})
     _save_session(session)
     return {"session": session["id"], "composition": composition, "letter": letter,
