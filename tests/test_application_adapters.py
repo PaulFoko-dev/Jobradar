@@ -28,7 +28,7 @@ def test_greenhouse_plan_maps_identity_and_documents_but_stops_on_free_question(
     plan = fill_plan(fields, _candidate(), {"cv": "/safe/CV.pdf", "lettre": "/safe/Lettre.pdf"})
 
     assert {item["value"] for item in plan["values"]} >= {
-        "Alice", "Martin", "alice@example.test", "+33 6 00 00 00 00", "/safe/CV.pdf", "/safe/Lettre.pdf",
+        "Alice", "Martin", "alice@example.test", "+33600000000", "/safe/CV.pdf", "/safe/Lettre.pdf",
     }
     assert plan["ready"] is False
     assert plan["interventions"] == [{
@@ -79,8 +79,10 @@ def test_workday_adapter_uses_stable_automation_form_and_stops_on_unknown_questi
     assert plan["ready"] is False
     assert [item["label"] for item in plan["interventions"]] == [
         "Délai de préavis", "Êtes-vous autorisé à travailler en France ?",
-        "J'accepte la politique de confidentialité",
     ]
+    # Le consentement obligatoire au traitement de la candidature est coché par la règle.
+    assert any(item["label"] == "J'accepte la politique de confidentialité" and item["value"] is True
+               for item in plan["values"])
     radio = next(field for field in fields if field.kind == "radio")
     assert radio.options == ("Oui", "Non")
     assert sum(field.kind == "radio" for field in fields) == 1
@@ -221,3 +223,136 @@ def test_profil_envoye_a_l_ia_sans_metadonnees() -> None:
     candidate = {"schema": 1, "sources": [{"id": "src-1"}], "skills": [
         {"name": "Linux", "level": "", "evidence": [], "id": "skill-1", "provenance": {"source": "src-1"}}]}
     assert prompt_profile(candidate) == {"skills": [{"name": "Linux"}]}
+
+
+def test_champ_sans_name_vise_par_son_id() -> None:
+    # Dépôt de CV VINCI : <input type="file" id="candidate_resume_remote_url"> sans attribut name.
+    html = """<form method="post"><label for="candidate_email">E-mail</label>
+    <input id="candidate_email" name="candidate[email]" type="email">
+    <label for="candidate_resume_remote_url">Importer un CV</label>
+    <input id="candidate_resume_remote_url" type="file" required></form>"""
+    fields = {field.label: field for field in adapter_for("generic").parse(html)}
+    assert fields["Importer un CV"].selector == '[id="candidate_resume_remote_url"]'
+    assert fields["E-mail"].selector == '[name="candidate[email]"]'
+
+
+def test_champ_lettre_de_motivation_recoit_la_lettre_entiere(monkeypatch) -> None:
+    from jobradar.application_adapters import ai_plan
+    monkeypatch.setattr(ai, "ask_ai", lambda *_a: pytest.fail("aucun appel IA attendu"))
+    paragraphs = ["Madame, Monsieur,", "Élève ingénieur en cybersécurité, je souhaite rejoindre Acme.",
+                  "Je vous prie d'agréer mes salutations."]
+    field = {"selector": "#l", "label": "Lettre de motivation*", "classification": "motivation",
+             "input_kind": "textarea", "maxlength": None, "kind": "missing_required"}
+    result = ai_plan({"values": [], "ready": False, "interventions": [field]}, {"identity": {}}, {}, "", "fr",
+                     {"letter_paragraphs": paragraphs})
+    assert result["values"][0]["value"] == "\n\n".join(paragraphs)
+    assert result["values"][0]["source"] == "document:lettre" and result["ready"]
+
+
+def test_comment_nous_avez_vous_connus_prend_le_site_de_l_entreprise_puis_linkedin() -> None:
+    from jobradar.application_adapters import source_answer
+    assert source_answer(["Indeed", "Offre Linkedin", "Site HGH.com", "Autre"]) == "Site HGH.com"
+    assert source_answer(["Post LinkedIn", "Offre LinkedIn", "Salon"]) == "Offre LinkedIn"
+    assert source_answer(["Site d'emploi", "Recommandation", "Autre"]) == "Autre"
+    assert source_answer(["Recommandation", "Salon de recrutement"]) is None
+
+    group = "Comment vous nous avez connu? *"
+    boxes = [Field(f"#c{index}", f"c{index}", label, "checkbox", False, group=group)
+             for index, label in enumerate(["Offre Linkedin", "Site HGH.com", "Autre"])]
+    select = Field("#how", "how", "How did you hear about us?", "select", True, ("Indeed", "LinkedIn", "Other"))
+    text = Field("#src", "src", "Comment avez-vous connu cette offre ?", "text", True)
+    plan = fill_plan([*boxes, select, text], _candidate(), {})
+    values = {item["selector"]: item["value"] for item in plan["values"]}
+    assert values == {"#c1": True, "#how": "LinkedIn", "#src": "LinkedIn"} and plan["ready"]
+
+
+def test_question_sensible_ou_sans_option_sure_reste_pour_l_utilisateur() -> None:
+    rqth = Field("#rqth", "rqth", "Êtes-vous reconnu travailleur handicapé ?", "radio", True, ("Oui", "Non"),
+                 sensitive=True)
+    boxes = [Field(f"#c{index}", f"c{index}", label, "checkbox", False, group="Comment nous avez-vous connus ?")
+             for index, label in enumerate(["Recommandation", "Salon"])]
+    plan = fill_plan([rqth, *boxes], _candidate(), {})
+    assert plan["values"] == [] and plan["interventions"][0]["kind"] == "sensitive"
+
+
+def test_nom_et_indicatif_ne_recoivent_pas_le_nom_complet_ni_le_numero() -> None:
+    fields = [Field('[name="lastname"]', "lastname", "Nom *", "text", True),
+              Field("#cc", "cc", "Phone number country", "select", False, ("France", "Belgique"))]
+    plan = fill_plan(fields, _candidate(), {})
+    assert [(item["selector"], item["value"]) for item in plan["values"]] == [('[name="lastname"]', "Martin")]
+
+
+def test_deuxieme_prenom_reste_vide() -> None:
+    fields = [Field("#p", "p", "Prénom : *", "text", True), Field("#m", "m", "Deuxième Prénom", "text", False)]
+    plan = fill_plan(fields, _candidate(), {})
+    assert [(item["selector"], item["value"]) for item in plan["values"]] == [("#p", "Alice")]
+
+
+def test_libelle_source_seul_est_la_question_comment_nous_avez_vous_connus() -> None:
+    field = Field("#s", "s", "Source *", "select", True, ("Indeed", "LinkedIn", "Thales Careers Site", "Other"))
+    plan = fill_plan([field], _candidate(), {})
+    assert plan["values"][0]["value"] == "Thales Careers Site"
+
+
+def test_formulaire_thales_ni_salon_ni_nom_dans_la_rue_ni_case_cochee() -> None:
+    from jobradar.application_adapters import source_answer
+    assert source_answer(["Careers Fair", "Job Board", "Social Media", "University / Polytechnic", "Website"]) == "Website"
+    fields = [Field("#street", "street", "Street name and type", "text", False),
+              Field("#company", "company", "Company name", "text", False),
+              Field("#name", "name", "Name", "text", True),
+              Field("#news", "news", "I consent to receive update messages by email.", "checkbox", True)]
+    plan = fill_plan(fields, _candidate(), {})
+    assert [(item["selector"], item["value"]) for item in plan["values"]] == [("#name", "Alice Martin")]
+
+
+def test_telephone_national_quand_l_indicatif_est_une_liste_a_part() -> None:
+    from jobradar.application_adapters import national_phone
+    assert national_phone("+33 7 63 95 67 80") == "0763956780"
+    assert national_phone("0033 6 00 00 00 00") == "0600000000"
+    phone = Field("#tel", "tel", "Phone number *", "text", True)
+    code = Field("#cc", "cc", "Country Phone Code *", "select", True, ("France (+33)", "Belgique (+32)"))
+    assert fill_plan([phone, code], _candidate(), {})["values"][0]["value"] == "0600000000"
+    assert fill_plan([phone], _candidate(), {})["values"][0]["value"] == "+33600000000"
+
+
+def test_consentement_obligatoire_coche_jamais_la_newsletter() -> None:
+    fields = [Field("#p", "p", "* I have read the Privacy Notice and I agree", "checkbox", True),
+              Field("#u", "u", "I consent to receive update messages by email.", "checkbox", True),
+              Field("#f", "f", "Oui, les filiales du groupe peuvent consulter ma candidature", "checkbox", True),
+              Field("#o", "o", "J'accepte la politique de confidentialité", "checkbox", False),
+              Field("#n", "n", "I have read the Privacy Notice and I do not agree to the AI tool", "checkbox", True)]
+    plan = fill_plan(fields, _candidate(), {})
+    assert [(item["selector"], item["value"]) for item in plan["values"]] == [("#p", True)]
+
+
+def test_telephone_national_quand_le_champ_est_trop_court() -> None:
+    field = Field("#tel", "tel", "Téléphone", "tel", True, maxlength=10)
+    assert fill_plan([field], _candidate(), {})["values"][0]["value"] == "0600000000"
+
+
+def test_adresse_postale_code_postal_departement_et_ville_de_residence() -> None:
+    candidate = _candidate()
+    candidate["identity"] |= {"postal_code": "77100", "residence_city": "Meaux", "region": "Seine-et-Marne"}
+    fields = [Field("#cp", "cp", "Postal Code * Postal Code", "text", True),
+              Field("#state", "state", "state *", "select", True, ("Paris", "Seine-et-Marne")),
+              Field("#city", "city", "City", "text", False),
+              Field("#st", "st", "Personal statement", "text", False)]
+    values = {item["selector"]: item["value"] for item in fill_plan(fields, candidate, {})["values"]}
+    assert values == {"#cp": "77100", "#state": "Seine-et-Marne", "#city": "Meaux"}
+
+
+def test_workday_indicatif_extension_et_recherche_deja_choisie_restent_intacts() -> None:
+    fields = [Field("#cc", "cc", "Country Phone Code * Search 1 item selected, France (+33)", "text", True),
+              Field("#tel", "tel", "Phone Number *", "text", True),
+              Field("#ext", "ext", "Phone Extension", "text", False),
+              Field("#src", "src", "How Did You Hear About Us? * Search 1 item selected, Web - Best Jobs", "text", True)]
+    plan = fill_plan(fields, _candidate(), {})
+    assert {item["selector"]: item["value"] for item in plan["values"]} == {"#tel": "0600000000"}
+    assert plan["interventions"] == [] and plan["ready"]
+
+
+def test_seul_depot_sans_libelle_recoit_le_cv() -> None:
+    drop = Field("[data-jobradar-field=\"2\"]", "2", "Drop files here or Select files", "file", False)
+    other = Field("#extra", "extra", "Fichiers supplémentaires", "file", False)
+    assert fill_plan([drop], _candidate(), {"cv": "/safe/CV.pdf"})["values"][0]["value"] == "/safe/CV.pdf"
+    assert fill_plan([drop, other], _candidate(), {"cv": "/safe/CV.pdf"})["values"] == []

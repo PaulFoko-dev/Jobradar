@@ -17,7 +17,15 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from . import ai, config, profile
-from .application_adapters import SENSITIVE_TERMS, _first_name, _fold, _last_name
+from .application_adapters import (
+    CONSENT_WORDS,
+    NEWSLETTER_WORDS,
+    SENSITIVE_TERMS,
+    _first_name,
+    _fold,
+    _last_name,
+    compact_phone,
+)
 
 MODES = ("always", "fallback", "off")
 MAX_DECISIONS = 12
@@ -29,10 +37,6 @@ PAGE_KINDS = ["offer_page", "application_form", "multi_step_form", "login", "acc
 ACTION_TYPES = ["click", "fill", "upload", "select", "check", "stop"]
 FILES = ("cv", "lettre")
 GENERATED_SOURCES = ("motivation", "question")
-CONSENT_WORDS = ("j accepte", "i agree", "i accept", "consent", "conditions", "politique de confidentialite",
-                 "privacy", "rgpd", "gdpr", "donnees personnelles", "personal data", "terms")
-NEWSLETTER_WORDS = ("newsletter", "offres similaires", "alerte", "job alert", "marketing", "partenaires",
-                    "partners", "promotion", "similar jobs")
 CLICKABLE = {"a", "button", "label", "summary"}
 
 SNAPSHOT_JS = r"""(limit) => {
@@ -127,7 +131,8 @@ Ton rôle : comprendre la page et dire au programme quoi faire, uniquement avec 
   « Continuer » dans un formulaire en plusieurs étapes), accept_cookies, close_popup, submit (bouton qui envoie
   définitivement la candidature : le programme ne le clique pas lui-même, il le vérifie d'abord) ;
 - fill {id, source} : source = une CLÉ DE PROFIL listée, ou « motivation » (texte libre de motivation),
-  ou « question » (autre question ouverte) — jamais de valeur libre ;
+  « lettre » (zone de texte qui demande la lettre de motivation elle-même, le programme y colle la lettre
+  envoyée) ou « question » (autre question ouverte) — jamais de valeur libre ;
 - upload {id, source} : source = cv ou lettre ;
 - select {id, option} : option = libellé EXACT d'une option de l'élément, cohérent avec le profil ; une longue
   liste (options_total) ne montre que les options proches du profil : choisis parmi elles (pays, indicatif…) ;
@@ -160,7 +165,9 @@ def mode() -> str:
 
 def snapshot(page) -> dict:
     data = page.evaluate(SNAPSHOT_JS, MAX_ELEMENTS)
-    essence = json.dumps([data["url"].split("#")[0],
+    # Les adresses des cadres intégrés comptent : une connexion faite dans un cadre (iCIMS) change la page.
+    frames = [frame.url.split("#")[0] for frame in getattr(page, "frames", [])[1:]]
+    essence = json.dumps([data["url"].split("#")[0], frames,
                           [(item["tag"], item["type"], item["text"], item["label"]) for item in data["elements"]]],
                          ensure_ascii=False)
     data["hash"] = hashlib.sha1(essence.encode()).hexdigest()
@@ -175,8 +182,10 @@ def profile_values(candidate: dict) -> dict[str, str]:
         "last_name": _last_name(identity.get("full_name")),
         "full_name": identity.get("full_name"),
         "email": identity.get("email"),
-        "phone": identity.get("phone"),
-        "city": identity.get("city"),
+        "phone": compact_phone(identity.get("phone")),
+        "city": identity.get("residence_city") or identity.get("city"),
+        "postal_code": identity.get("postal_code"),
+        "region": identity.get("region"),
     }
     for link in identity.get("links") or []:
         url = link.get("url") if isinstance(link, dict) else link
@@ -431,7 +440,8 @@ def validate(raw: dict, snap: dict, values: dict[str, str]) -> dict:
                 element["tag"] == "input" and element["type"] in {"", "text", "email", "tel", "url", "number", "date"})
             if not text_like:
                 reason = "élément non saisissable"
-            elif action.get("source") not in keys | set(GENERATED_SOURCES):
+            elif action.get("source") not in keys | set(GENERATED_SOURCES) | (
+                    {"lettre"} if element["tag"] == "textarea" else set()):
                 reason = "source hors du profil"
         elif kind == "upload":
             if element["type"] != "file" or action.get("source") not in FILES:

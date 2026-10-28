@@ -19,6 +19,21 @@ SEARCH = """<form action="/recherche" method="get" class="search"><label for="k"
 <input id="k" name="k"><label for="l">Où ? Ville</label><input id="l" name="l"><button type="submit">Rechercher</button></form>"""
 NEWSLETTER = """<form action="/newsletter" method="post" class="newsletter"><label for="nl">E-mail</label>
 <input id="nl" name="email" type="email"><button type="submit">S'abonner</button></form>"""
+METHOD_CHOOSER = """<!doctype html><html><body><h1>How do you want to apply?</h1>
+<button type="button">Log in</button><button type="button">Apply with Indeed</button>
+<button id="device" type="button">From Device</button><input id="pick" type="file" hidden>
+<section id="next" hidden></section><script>
+device.onclick=()=>pick.click(); pick.onchange=()=>{
+  next.hidden=false; next.innerHTML=`<form action="/envoi" method="post" enctype="multipart/form-data">
+  <label>Full name<input name="name" required></label><label>Email<input name="email" type="email" required></label>
+  <label>Resume<input name="resume" type="file" required></label>
+  <button type="submit">Submit application</button></form>`;
+};</script></body></html>"""
+PARTIAL = """<!doctype html><html><body><form action="/envoi" method="post" enctype="multipart/form-data">
+<label>Full name<input name="name" required></label><label>Email<input name="email" type="email" required></label>
+<label>Resume<input name="resume" type="file" required></label>
+<label>Pourquoi souhaitez-vous nous rejoindre ?<textarea name="motivation" required></textarea></label>
+<button type="submit">Submit application</button></form></body></html>"""
 JOBBOARD = """<!doctype html><html lang="fr"><body>{search}<h1>Stage DevSecOps</h1><p>Missions…</p>{link}</body></html>"""
 CANDIDATE = {"identity": {"full_name": "Camille Durand", "email": "camille@example.test"}, "standard_answers": {}}
 
@@ -34,6 +49,8 @@ class _Site(http.server.BaseHTTPRequestHandler):
                  "/silence": "<html><body><p>Page suivante.</p></body></html>",
                  "/offre": JOBBOARD.format(search=SEARCH, link='<a href="/form">Postuler sur le site du recruteur</a>'),
                  "/offre-sans-lien": JOBBOARD.format(search=SEARCH, link=""),
+                 "/method": METHOD_CHOOSER,
+                 "/partial": PARTIAL,
                  "/double": "<html><body>" + NEWSLETTER + FORM.format(action="/envoi")[FORM.index("<form"):]}
         body = pages.get(self.path)
         self.send_response(200 if body else 404)
@@ -235,3 +252,34 @@ def test_remplissage_et_envoi_restent_dans_le_formulaire_de_candidature(client, 
     assert db.get_application_attempt(attempt["id"])["status"] == "submitted"
     assert _Site.posts == ["/envoi"]  # la newsletter, placée avant et dotée d'un champ « email », est intacte
     assert b"camille@example.test" in _Site.bodies[0]
+
+
+def test_ecran_de_choix_importe_le_cv_depuis_l_appareil_puis_remplit_le_formulaire(
+        client, site, invisible_browser) -> None:
+    attempt = _claimed_attempt(client, f"{site}/method")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "submitted", saved
+    assert _Site.posts == ["/envoi"]
+    assert b"camille@example.test" in _Site.bodies[0]
+
+
+def test_champs_connus_sont_remplis_avant_de_demander_la_reponse_manquante(
+        client, site, invisible_browser, monkeypatch) -> None:
+    monkeypatch.setattr(application_browser.application_adapters, "ai_plan", lambda plan, *_a, **_k: plan)
+    attempt = _claimed_attempt(client, f"{site}/partial")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "needs_user"
+    assert saved["intervention"]["kind"] == "missing_fields"
+    assert [field["label"] for field in saved["intervention"]["fields"]] == [
+        "Pourquoi souhaitez-vous nous rejoindre ?"
+    ]
+    preview = saved["intervention"]["preview"]
+    assert any(item["value"] == "camille@example.test" for item in preview)
+    assert any(item["value"] == "Fichier sélectionné" for item in preview)
+    assert _Site.posts == []

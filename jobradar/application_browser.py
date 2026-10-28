@@ -4,13 +4,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
+from urllib.request import urlopen
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import Error as PlaywrightError
@@ -33,8 +35,10 @@ from . import (
 CONFIRMATION_WORDS = ("thank you", "application received", "candidature reçue", "merci pour votre candidature")
 CONFIRMATION_URL_WORDS = ("thank-you", "thank_you", "confirmation", "application-submitted", "success")
 BLOCK_WORDS = ("captcha", "verify you are human", "connexion", "sign in", "log in", "verification code")
-BLOCK_SELECTORS = ('input[type="password"]', 'iframe[src*="captcha" i]', '[data-sitekey]',
-                   '[class*="captcha" i]', '[id*="captcha" i]')
+HUMAN_CHECK_WORDS = ("verify you are human", "verifiez que vous etes humain", "je ne suis pas un robot",
+                     "i m not a robot")
+BLOCK_SELECTORS = ('input[type="password"]', 'iframe[src*="captcha" i]', 'iframe[src*="challenges.cloudflare" i]',
+                   '[data-sitekey]', '[class*="captcha" i]', '[id*="captcha" i]')
 VALIDATION_SELECTORS = ('[aria-invalid="true"]', '[role="alert"]', '.field-error', '.validation-error')
 SUBMIT_SELECTORS = {
     "greenhouse": ("#submit_app", "button[type=submit]", "input[type=submit]"),
@@ -45,6 +49,7 @@ SUBMIT_SELECTORS = {
 }
 WORKDAY_MAX_STEPS = 8
 WORKDAY_FINAL_WORDS = ("submit", "send application", "envoyer", "soumettre", "postuler")
+RESUME_METHOD_WORDS = ("from device", "upload resume", "upload cv", "with resume", "depuis mon appareil")
 RENDER_WAIT_MS = 15_000
 UNRESOLVED = "unresolved"
 APPLICATION_LOCK_TIMEOUT_S = 600
@@ -109,6 +114,38 @@ def open_system_browser(playwright=None) -> dict:
     return browser | {"port": port}
 
 
+def _unfreeze_tabs(port: int) -> list[str]:
+    """Un seul onglet figé (script bloqué) suffit à bloquer la connexion au navigateur : il est rechargé.
+
+    Chaque onglet doit répondre à une évaluation triviale en 3 s ; sinon le navigateur le recharge, ce qui
+    marche même quand la page est figée. Rien n'est fermé ni envoyé.
+    """
+    try:
+        from websockets.sync.client import connect  # fourni par uvicorn[standard]
+    except ImportError:
+        return []
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10) as response:
+            targets = [item for item in json.load(response)
+                       if item.get("type") == "page" and item.get("webSocketDebuggerUrl")]
+    except (OSError, ValueError):
+        return []
+    reloaded = []
+    for target in targets:
+        try:
+            with connect(target["webSocketDebuggerUrl"], open_timeout=3, max_size=None) as socket_:
+                socket_.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": "1"}}))
+                try:
+                    socket_.recv(timeout=3)
+                except TimeoutError:
+                    socket_.send(json.dumps({"id": 2, "method": "Page.reload", "params": {}}))
+                    reloaded.append(target["url"])
+                    LOGGER.warning("Onglet figé rechargé avant connexion : %s", target["url"][:120])
+        except Exception:  # noqa: BLE001 - onglet fermé entre-temps, protocole refusé : on continue
+            continue
+    return reloaded
+
+
 @contextmanager
 def _browser_context(playwright):
     """Isole le moteur choisi ; le navigateur du système et son profil persistent après la candidature."""
@@ -123,6 +160,7 @@ def _browser_context(playwright):
             _close_quietly(context)
         return
     port = open_system_browser(playwright)["port"]
+    _unfreeze_tabs(port)
     browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     yield context
@@ -180,36 +218,126 @@ def _selected_files(attempt: dict) -> dict[str, str]:
     return selected
 
 
-def _fill(root, plan: dict) -> None:
+def _retag(root, plan: dict) -> None:
+    """Repose les repères des champs sans nom, effacés si le site a reconstruit le formulaire."""
+    if not any("data-jobradar-field" in item["selector"] for item in plan["values"]):
+        return
+    try:
+        root.evaluate(TAG_CONTROLS_JS)
+    except PlaywrightError:
+        pass
+
+
+PHONE_ERROR_WORDS = ("phone", "telephone", "mobile", "portable")
+
+
+def _retry_phone_national(form, page, plan: dict, errors: list[str]) -> bool:
+    """Le site refuse « +33 6 … » : le numéro est ressaisi au format national (0xxxxxxxxx), une seule fois."""
+    if not any(word in application_adapters._fold(error) for error in errors for word in PHONE_ERROR_WORDS):
+        return False
+    changed = False
     for item in plan["values"]:
+        national = application_adapters.national_phone(item["value"]) if item["kind"] in {"tel", "text"} else None
+        if (str(item.get("source", "")).startswith("profil:phone") and national
+                and str(item["value"]).strip().startswith(("+", "00"))):
+            item["value"] = national
+            changed = True
+    if changed:
+        _fill(form, {"values": [item for item in plan["values"] if str(item.get("source", "")).startswith("profil:phone")]})
+        page.wait_for_timeout(500)
+    return changed
+
+
+PASTE_RESUME_TERMS = ("paste resume", "paste your resume", "copy and paste resume", "resume text", "cv text",
+                      "coller votre cv", "collez votre cv", "copier coller", "texte du cv")
+
+
+def _paste_resume(plan: dict, files: dict) -> dict:
+    """« Copy and paste resume » : le texte exact du CV envoyé, lu dans son PDF."""
+    wanted = [item for item in plan["interventions"] if item.get("input_kind") == "textarea"
+              and any(term in application_adapters._fold(item["label"]) for term in PASTE_RESUME_TERMS)]
+    if not wanted or not files.get("cv"):
+        return plan
+    try:
+        path = Path(files["cv"])
+        text = "\n".join(line.strip() for line in profile.extract_text(path.name, path.read_bytes()).splitlines()
+                         if line.strip())
+    except (OSError, ValueError):
+        return plan
+    if not text:
+        return plan
+    values = [{"selector": item["selector"], "value": text[: item.get("maxlength") or len(text)], "kind": "textarea",
+               "confidence": 1.0, "source": "document:cv_texte", "label": item["label"]} for item in wanted]
+    selectors = {item["selector"] for item in wanted}
+    interventions = [item for item in plan["interventions"] if item["selector"] not in selectors]
+    return {"values": [*plan["values"], *values], "interventions": interventions, "ready": not interventions}
+
+
+NEXT_LABELS = re.compile(r"^\s*(next|suivant|continuer|continue|save and continue|étape suivante)\s*$", re.I)
+
+
+def _settle(page) -> None:
+    """Attend la fin des échanges réseau de la page (au plus 15 s), sans jamais échouer."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=15_000)
+    except PlaywrightError:
+        pass
+    page.wait_for_timeout(1_000)
+
+
+FILL_ORDER = {"select": 0, "listbox": 0, "radio": 1}  # une liste (pays…) peut reconstruire ou vider les champs suivants
+
+
+def _fill(root, plan: dict) -> None:
+    _retag(root, plan)
+    for item in sorted(plan["values"], key=lambda item: FILL_ORDER.get(item["kind"], 2)):
         locator = root.locator(item["selector"]).first
         if item["kind"] == "file":
             locator.set_input_files(item["value"])
         elif item["kind"] == "checkbox":
-            locator.set_checked(bool(item["value"]))
+            try:
+                locator.set_checked(bool(item["value"]), timeout=5_000)
+            except PlaywrightError:
+                # Case stylée (input caché sous un dessin) : l'événement est remis à la case elle-même.
+                if locator.is_enabled() and locator.is_checked() != bool(item["value"]):
+                    locator.dispatch_event("click")
         elif item["kind"] == "select":
             locator.select_option(label=item["value"])
+        elif item["kind"] == "listbox":
+            locator.click(timeout=5_000)
+            option = root.page.get_by_role("option", name=str(item["value"]), exact=True)
+            option.first.click(timeout=5_000)
+            root.page.wait_for_timeout(300)
         elif item["kind"] == "radio":
             # Le plan contient le libellé visible validé par l'utilisateur,
             # jamais une valeur interne opaque propre au site.
             root.get_by_label(item["value"], exact=True).check()
         else:
             locator.fill(item["value"])
+            # Quitter le champ comme une personne : le site revalide et retire son ancien message d'erreur.
+            locator.evaluate("el => el.blur()")
 
 
 def _verify_filled(root, plan: dict) -> list[dict]:
     """Relit le DOM après remplissage ; un écart interdit tout clic d'envoi."""
+    _retag(root, plan)
     issues = []
     for item in plan["values"]:
         locator = root.locator(item["selector"]).first
         try:
             if item["kind"] == "file":
                 names = locator.evaluate("el => Array.from(el.files || []).map(file => file.name)")
-                actual = Path(item["value"]).name in names
+                # Workday envoie le fichier aussitôt, vide le champ et affiche son nom dans le formulaire.
+                actual = Path(item["value"]).name in names or Path(item["value"]).name in root.inner_text()
             elif item["kind"] == "checkbox":
                 actual = locator.is_checked()
+            elif item["kind"] == "listbox":
+                shown = " ".join(locator.inner_text().split())
+                actual = str(item["value"]) if shown == str(item["value"]).strip() else shown
             elif item["kind"] == "select":
-                actual = locator.locator("option:checked").inner_text().strip()
+                # Lu dans le DOM : une liste masquée sous un widget de recherche n'a pas de texte « visible ».
+                chosen = locator.evaluate("el => [...el.selectedOptions].map(option => option.text.trim())")
+                actual = str(item["value"]) if str(item["value"]).strip() in chosen else ", ".join(chosen)
             elif item["kind"] == "radio":
                 chosen = root.locator(f'{item["selector"]}:checked')
                 actual = root.get_by_label(str(item["value"]), exact=True).is_checked() if chosen.count() else False
@@ -224,15 +352,28 @@ def _verify_filled(root, plan: dict) -> list[dict]:
     return issues
 
 
+SUCCESS_WORDS = ("successfully", "uploaded", "avec succes", "telecharge", "televerse", "enregistre",
+                 "saved")
+
+
 def _validation_errors(page) -> list[str]:
-    """Relève uniquement les messages de validation visibles et non vides."""
+    """Relève uniquement les messages de validation visibles et non vides, dans le formulaire de candidature.
+
+    Hors du formulaire, un bandeau ``role="alert"`` peut afficher le titre de l'offre (Flatchr) : ce n'est
+    pas une erreur de saisie.
+    """
     messages = []
+    marked = page.locator("[data-jobradar-form]")
+    root = marked.first if marked.count() else page
     for selector in VALIDATION_SELECTORS:
-        locator = page.locator(selector)
+        locator = root.locator(selector)
         for index in range(min(locator.count(), 20)):
             item = locator.nth(index)
             try:
                 text = " ".join(item.inner_text(timeout=500).split())
+                # « CV successfully uploaded » : une annonce de réussite (role="alert") n'est pas une erreur.
+                if any(word in application_adapters._fold(text) for word in SUCCESS_WORDS):
+                    continue
                 if item.is_visible() and text and text not in messages:
                     messages.append(text[:300])
             except PlaywrightError:
@@ -245,10 +386,30 @@ def _confirmed(page, body_text: str) -> bool:
     return any(word in body_text for word in CONFIRMATION_WORDS) or any(word in url for word in CONFIRMATION_URL_WORDS)
 
 
+CAPTCHA_JS = r"""(selectors) => [...document.querySelectorAll(selectors)].some(el => {
+  // Le badge reCAPTCHA « invisible » (Thales, Phenom…) n'attend aucune action de ta part.
+  if (el.closest('.grecaptcha-badge') || /size=invisible/.test(el.src || '')
+      || el.getAttribute('data-size') === 'invisible') return false;
+  const box = el.getBoundingClientRect(), style = getComputedStyle(el);
+  return box.width > 30 && box.height > 30 && style.visibility !== 'hidden' && style.display !== 'none';
+})"""
+
+
+def _captcha_visible(page) -> bool:
+    try:
+        return bool(page.evaluate(CAPTCHA_JS, ", ".join(BLOCK_SELECTORS[1:])))
+    except PlaywrightError:
+        return False
+
+
 def _blocked(page, body_text: str) -> bool:
     """Détecte un vrai mur interactif, sans confondre un lien de pied de page."""
-    if any(page.locator(selector).count() for selector in BLOCK_SELECTORS):
+    if page.locator(BLOCK_SELECTORS[0]).count() or _captcha_visible(page):
         return True
+    # Un écran de choix peut proposer « Log in » à côté de « From Device » : la connexion est alors
+    # facultative et ne doit pas masquer la voie de candidature directe.
+    if any(word in application_adapters._fold(body_text) for word in RESUME_METHOD_WORDS):
+        return False
     compact = " ".join(body_text.split())
     return len(compact) < 2_000 and any(word in compact for word in BLOCK_WORDS)
 
@@ -289,9 +450,10 @@ SIGNUP_WORDS = ("creer un compte", "creer mon compte", "create account", "create
 
 def _human_step_kind(page, visible: str) -> str:
     """Type d'étape humaine reconnu par les règles, pour un message précis à l'utilisateur."""
-    if any(page.locator(selector).count() for selector in BLOCK_SELECTORS[1:]) or "captcha" in visible:
-        return "captcha"
     folded = application_adapters._fold(visible)
+    # « Protected by reCAPTCHA » en pied de page ne compte pas : il faut un défi affiché.
+    if _captcha_visible(page) or any(words in folded for words in HUMAN_CHECK_WORDS):
+        return "captcha"
     return "account_creation" if any(word in folded for word in SIGNUP_WORDS) else "login"
 
 
@@ -309,9 +471,12 @@ def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
     """
     minutes = config.browser_settings()["human_wait_minutes"]
     deadline = time.monotonic() + minutes * 60
+    filled = _prefill_known(page, supervision, login=kind == "login") if kind in {"login", "account_creation"} else []
     message = (f"{HUMAN_STEP_MESSAGES.get(kind, HUMAN_STEP_MESSAGES['login'])[:1].upper()}"
                f"{HUMAN_STEP_MESSAGES.get(kind, HUMAN_STEP_MESSAGES['login'])[1:]} : JobRadar reprend tout seul "
-               f"dès que c'est fait (attente jusqu'à {minutes} min).")
+               f"dès que c'est fait (attente jusqu'à {minutes} min)."
+               + (f" Déjà rempli pour toi : {', '.join(filled)}." if filled else ""))
+    _claim_tab(page, attempt)
     notifications.application_intervention(attempt, {"kind": "waiting_user", "message": message,
                                                      "action": "open_browser"})
     supervision.journal.waiting(message, time.time() + minutes * 60)
@@ -331,7 +496,9 @@ def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
                 if tab.is_closed():
                     continue
                 try:
-                    return "ready", _ready_tab(tab, provider)
+                    ready = _ready_tab(tab, provider)
+                    _claim_tab(ready, attempt)
+                    return "ready", ready
                 except (application_adapters.NotApplicationForm, ValueError, PlaywrightError):
                     pass
                 try:
@@ -348,15 +515,68 @@ def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
                 verdict = _classify_after_wait(tab, supervision, kind)
                 if verdict in HUMAN_STEP_KINDS:
                     state[0] = current  # étape suivante de l'inscription : on continue d'attendre
+                    _prefill_known(tab, supervision)
                     continue
+                _claim_tab(tab, attempt)
                 return verdict, tab
         return "timeout", page
     finally:
         supervision.journal.waiting(None)
 
 
+PREFILL_KINDS = {"text", "email", "tel", "url"}
+# Identifiant, mot de passe, code reçu : c'est à toi de les choisir ou de les saisir.
+PREFILL_SKIP_WORDS = ("user", "login", "identifiant", "pseudo", "password", "mot de passe", "code", "otp", "pin")
+
+
+def _prefill_known(page, supervision, *, login: bool = False) -> list[str]:
+    """Avant de te passer la main (création de compte, connexion), remplit ce que JobRadar connaît déjà.
+
+    Seuls les champs vides et visibles reçoivent une valeur exacte du profil (nom, e-mail, téléphone…) ;
+    mot de passe, identifiant, cases à cocher et questions restent pour toi. Rien n'est validé.
+    """
+    try:
+        page.locator("body").evaluate(TAG_CONTROLS_JS)
+        soup = BeautifulSoup(page.content(), "html.parser")
+    except PlaywrightError:
+        return []
+    secret = soup.select_one('input[type="password"]')
+    root = (secret.find_parent("form") if secret is not None else None) or soup.body
+    try:
+        fields = application_adapters.adapter_for("generic")._fields(root) if root is not None else []
+    except ValueError:
+        return []
+    def is_email(field) -> bool:  # l'e-mail sert souvent d'identifiant : il reste à pré-remplir
+        return field.kind == "email" or any(word in application_adapters._fold(field.label)
+                                            for word in ("e mail", "email", "courriel"))
+
+    fields = [field for field in fields if field.kind in PREFILL_KINDS and not field.sensitive
+              and (is_email(field) or not any(word in application_adapters._fold(f"{field.name} {field.label}").split()
+                                              or word in application_adapters._fold(field.name)
+                                              for word in PREFILL_SKIP_WORDS))]
+    if login:  # une page de connexion ne demande que l'identifiant : l'e-mail, rien d'autre
+        fields = [field for field in fields if is_email(field)]
+    plan = application_adapters.fill_plan(fields, supervision.candidate, {})
+    filled = []
+    for item in plan["values"]:
+        if not str(item["source"]).startswith("profil:"):
+            continue
+        locator = page.locator(item["selector"]).first
+        try:
+            if locator.is_visible() and locator.is_editable() and not locator.input_value():
+                locator.fill(str(item["value"]))
+                filled.append(" ".join(str(item["label"]).split())[:40])
+        except PlaywrightError:
+            continue
+    if filled:
+        supervision.journal.note("Champs connus pré-remplis avant de te passer la main : " + ", ".join(filled))
+    return filled
+
+
 def _ready_tab(tab, provider: str):
-    _live_form(tab, provider)
+    match = _live_form(tab, provider)
+    if any(field.kind == "password" for field in match.fields):
+        raise ValueError("Page de compte : l'étape humaine n'est pas terminée.")
     return tab
 
 
@@ -385,20 +605,83 @@ def _after_human_step(attempt: dict, outcome: str, page, decision: dict | None =
     _ai_intervention(attempt, "waiting_user", decision, message, action="resume", resume_url=resume_url)
 
 
-def _resume_page(context, attempt: dict):
-    """Onglet laissé ouvert lors d'une attente : la reprise continue là où tu t'es arrêté."""
-    url = (attempt.get("intervention") or {}).get("resume_url")
-    if not url:
+TAB_KEY = "jobradar-candidature"
+
+
+def _claim_tab(page, attempt: dict) -> None:
+    """Marque l'onglet de la candidature et note son adresse : une reprise le retrouve au lieu d'en rouvrir un."""
+    try:
+        page.evaluate("([key, value]) => sessionStorage.setItem(key, value)",
+                      [TAB_KEY, str(attempt["application_id"])])
+        profile.atomic_write(_proof_directory(attempt) / "onglet.json",
+                             json.dumps({"url": page.url}, ensure_ascii=False).encode())
+    except (PlaywrightError, OSError, db.NotFound):
+        pass
+
+
+def _last_tab_url(attempt: dict) -> str | None:
+    try:
+        return json.loads((_proof_directory(attempt) / "onglet.json").read_text(encoding="utf-8")).get("url")
+    except (OSError, ValueError, db.NotFound):
         return None
-    origin = urlsplit(url)[:2]
-    for tab in reversed(context.pages):
+
+
+def _offer_tokens(url: str) -> set[str]:
+    """Identifiants propres à une offre dans son adresse (« TGPTGWGLOBALR0343013… », « 1446216533 »…)."""
+    parts = urlsplit(url)
+    pieces = [*parts.path.split("/"), *(value for _, value in parse_qsl(parts.query))]
+    tokens = set()
+    for piece in pieces:
+        for token in re.split(r"[-_.~]", unquote(piece)) if len(piece) > 40 else [unquote(piece)]:
+            # Au moins 4 chiffres : « 257095 », « xlv0d9a66oppwelk » oui ; « etape-2 », « step-1 » non.
+            if len(token) >= 6 and sum(char.isdigit() for char in token) >= 4:
+                tokens.add(token.casefold())
+    return tokens
+
+
+APPLICATION_STEP_WORDS = ("apply", "application", "candidat", "postuler", "form", "step=")
+
+
+def _resume_page(context, attempt: dict):
+    """Onglet déjà ouvert pour cette candidature (attente, erreur, reprise) : on y continue sans doublon.
+
+    Par ordre de priorité : l'onglet marqué par JobRadar pour cette candidature (à la dernière adresse
+    connue d'abord), puis un onglet non marqué du même site dont l'adresse contient l'identifiant de
+    l'offre (le plus avancé dans la candidature d'abord). Un onglet marqué pour une autre offre n'est
+    jamais pris.
+    """
+    last = _last_tab_url(attempt)
+    urls = [url for url in ((attempt.get("intervention") or {}).get("resume_url"), last,
+                            attempt.get("target_url")) if url]
+    if not urls:
+        return None
+    domains = {_base_domain(url) for url in urls}
+    paths = {urlsplit(url)[:3] for url in urls}
+    tokens = set().union(*(_offer_tokens(url) for url in urls))
+    best = None
+    for order, tab in enumerate(context.pages):
         try:
-            if not tab.is_closed() and urlsplit(tab.url)[:2] == origin:
-                tab.bring_to_front()
-                return tab
+            if tab.is_closed() or _base_domain(tab.url) not in domains:
+                continue
+            owner = tab.evaluate("key => sessionStorage.getItem(key)", TAB_KEY)
         except PlaywrightError:
             continue
-    return None
+        address = unquote(tab.url).casefold()
+        further = any(word in address for word in APPLICATION_STEP_WORDS)
+        if owner == str(attempt["application_id"]):
+            score = 4 if last and urlsplit(tab.url)[:3] == urlsplit(last)[:3] else 3
+        elif owner is None and (any(token in address for token in tokens)
+                                or (not tokens and urlsplit(tab.url)[:3] in paths)):
+            # L'identifiant de l'offre fait foi : chez Thales, toutes les offres partagent « /global/en/apply ».
+            score = 2 if further else 1
+        else:
+            continue
+        if best is None or (score, order) > best[:2]:
+            best = (score, order, tab)
+    if best is None:
+        return None
+    best[2].bring_to_front()
+    return best[2]
 
 
 def _proof_directory(attempt: dict) -> Path:
@@ -503,14 +786,151 @@ def _mark_application_container(page) -> bool:
     }"""))
 
 
+TAG_CONTROLS_JS = r"""root => {
+  const clip = text => (text || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const controls = [...root.querySelectorAll('input,select,textarea')];
+  controls.forEach((control, position) => {
+    // Sans name ni id, un champ reste joignable par un repère tiré de sa position dans le formulaire :
+    // reposé à l'identique après un nouveau rendu de la page (React), il désigne toujours le même champ.
+    if (!control.name && !control.id) control.setAttribute('data-jobradar-field', String(position + 1));
+  });
+  for (const control of controls) {
+    if ((control.type || '').toLowerCase() === 'hidden') continue;
+    const labelled = (control.labels && control.labels.length) || control.getAttribute('aria-label')
+      || control.getAttribute('placeholder') || control.getAttribute('aria-labelledby');
+    if (!labelled) {
+      // Zone de dépôt « Déposez votre CV » : le texte voisin tient lieu de libellé.
+      let box = control.parentElement;
+      for (let depth = 0; box && depth < 3 && !clip(box.innerText); depth++) box = box.parentElement;
+      if (box && clip(box.innerText)) control.setAttribute('data-jobradar-label', clip(box.innerText));
+    }
+    if ((control.type || '').toLowerCase() !== 'checkbox') continue;
+    // Question commune d'une liste de cases : libellé sans champ, dans un bloc qui ne contient que des cases.
+    let box = control.parentElement;
+    for (let depth = 0; box && box !== root.parentElement && depth < 6; depth++, box = box.parentElement) {
+      const others = [...box.querySelectorAll('input,select,textarea')]
+        .filter(el => !['checkbox', 'hidden'].includes((el.type || '').toLowerCase()));
+      if (others.length) break;
+      const title = [...box.querySelectorAll('label,legend,h2,h3,h4,p,span')]
+        .find(el => !el.querySelector('input') && !el.contains(control)
+                   && !(el.parentElement && el.parentElement.closest('label'))
+                   && clip(el.innerText) && el.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING);
+      if (title) { control.setAttribute('data-jobradar-group', clip(title.innerText)); break; }
+    }
+  }
+}"""
+
+
+HIDDEN_SKIPPED_KINDS = {"text", "textarea", "email", "tel", "url", "number", "date"}
+
+
+def _mark_provider_form(page, provider: str) -> bool:
+    """Workday, Greenhouse… : le formulaire reconnu par les sélecteurs de l'adaptateur devient la cible.
+
+    Une étape « My Information » n'a ni CV ni couple e-mail + nom, mais reste le formulaire du fournisseur.
+    """
+    if provider == "generic":
+        return False
+    for selector in application_adapters.adapter_for(provider).form_selectors:
+        target = page.locator(selector)
+        try:
+            if target.count() and target.first.is_visible():
+                page.evaluate("() => document.querySelectorAll('[data-jobradar-form]')"
+                              ".forEach(el => el.removeAttribute('data-jobradar-form'))")
+                target.first.evaluate("el => el.setAttribute('data-jobradar-form', '')")
+                return True
+        except PlaywrightError:
+            continue
+    return False
+
+
 def _marked_match(page):
     """Champs lus dans le conteneur effectivement marqué : Python et la page visent le même bloc."""
     container = page.locator("[data-jobradar-form]")
     if not container.count():
         return None
+    container.first.evaluate(TAG_CONTROLS_JS)
     tag = BeautifulSoup(container.first.evaluate("el => el.outerHTML"), "html.parser").find()
-    fields = application_adapters.adapter_for("generic")._fields(tag) if tag else []
+    try:
+        fields = application_adapters.adapter_for("generic")._fields(tag) if tag else []
+    except ValueError:
+        fields = []  # que des listes maison : lues juste après
+    # Le HTML peut décrire des champs absents de la page vivante (gabarits) : ils ne sont pas remplissables.
+    # Un champ de texte caché est une variante non choisie (« coller le CV » à côté du dépôt de fichier) ;
+    # fichiers, cases et listes restent, souvent masqués sous un habillage personnalisé.
+    fields = [field for field in fields if container.first.locator(field.selector).count()
+              and (field.kind not in HIDDEN_SKIPPED_KINDS or container.first.locator(field.selector).first.is_visible())]
+    fields += _listbox_fields(page, container.first)
     return application_adapters.FormMatch(fields, "[data-jobradar-form]") if fields else None
+
+
+LISTBOX_JS = r"""root => [...root.querySelectorAll('button[aria-haspopup="listbox"],[role="combobox"][aria-haspopup="listbox"]')]
+  .filter(el => el.getClientRects().length > 0).map((el, index) => {
+    el.setAttribute('data-jobradar-listbox', String(index + 1));
+    const box = el.closest('[data-automation-id^="formField"],fieldset,.form-group') || el.parentElement;
+    const label = box ? (box.querySelector('label,legend')?.innerText || '') : '';
+    const required = /\*/.test(label) || el.getAttribute('aria-required') === 'true';
+    return {index: index + 1, label: label.replace(/\s+/g, ' ').trim(), required, current: el.innerText.trim()};
+  })"""
+
+
+LISTBOX_CONTAINER_JS = r"""() => {
+  const lists = [...document.querySelectorAll('button[aria-haspopup="listbox"]')].filter(el => el.getClientRects().length);
+  if (!lists.length) return false;
+  const forms = new Set(lists.map(el => el.closest('form')));
+  let target = forms.size === 1 && !forms.has(null) ? [...forms][0] : lists[0].parentElement;
+  while (target && !lists.every(el => target.contains(el))) target = target.parentElement;
+  const action = 'button:not([aria-haspopup]),input[type=submit]';
+  while (target && target !== document.body && !target.querySelector(action)) target = target.parentElement;
+  if (!target) return false;
+  document.querySelectorAll('[data-jobradar-form]').forEach(el => el.removeAttribute('data-jobradar-form'));
+  target.setAttribute('data-jobradar-form', '');
+  return true;
+}"""
+
+
+def _listbox_form(page):
+    """Étape faite seulement de listes maison (questions Workday « Select One ») : le bloc qui les contient."""
+    try:
+        if not page.evaluate(LISTBOX_CONTAINER_JS):
+            return None
+        match = _marked_match(page)
+    except (PlaywrightError, ValueError):
+        return None
+    return match if match and any(field.kind == "listbox" for field in match.fields) else None
+
+
+def _listbox_fields(page, root) -> list:
+    """Listes maison (Workday : bouton « Select One » qui ouvre une liste) : options lues en l'ouvrant un instant."""
+    try:
+        found = root.evaluate(LISTBOX_JS)
+    except PlaywrightError:
+        return []
+    fields = []
+    for item in found:
+        if not item["label"]:
+            continue
+        selector = f'[data-jobradar-listbox="{item["index"]}"]'
+        button = root.locator(selector).first
+        try:
+            button.click(timeout=3_000)
+            page.wait_for_timeout(400)
+            options = [text.strip() for text in page.locator('[role="option"]').all_inner_texts() if text.strip()]
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(200)
+        except PlaywrightError:
+            continue
+        label = item["label"]
+        folded = application_adapters._fold(label)
+        sensitive = any(term in folded for term in application_adapters.SENSITIVE_TERMS)
+        # Déjà choisi sur le site (autre que l'invite « Select One ») : la liste compte comme remplie.
+        answered = item["current"] and application_adapters._fold(item["current"]) not in {"select one", "choisir",
+                                                                                           "selectionner", ""}
+        fields.append(application_adapters.Field(
+            selector, f"listbox-{item['index']}", label, "listbox", bool(item["required"]) and not answered,
+            tuple(options), sensitive, None,
+            application_adapters.classify_text_field("select", selector, label, sensitive)))
+    return fields
 
 
 def _live_form(page, provider: str):
@@ -555,6 +975,46 @@ def _dismiss_cookies(page) -> str | None:
         except PlaywrightError:
             continue
     return None
+
+
+def _choose_resume_method(page, files: dict) -> bool:
+    """Franchit un écran de choix de méthode (ex. L'Oréal) en important le CV.
+
+    Ces pages ne contiennent pas encore de formulaire et leurs actions sont souvent des boutons sans
+    ``href``. On ne choisit jamais la connexion, Indeed ou une candidature sans CV. Si le sélecteur de
+    fichier ou la navigation ne réagit pas, le parcours normal reprend et s'arrête de façon contrôlée.
+    """
+    cv = files.get("cv")
+    if not cv:
+        return False
+    candidates = page.locator("button, a, [role=button]")
+    for index in range(min(candidates.count(), 100)):
+        item = candidates.nth(index)
+        try:
+            text = application_adapters._fold(" ".join(item.inner_text(timeout=250).split()))
+            if not item.is_visible() or not any(word in text for word in RESUME_METHOD_WORDS):
+                continue
+            existing = page.locator('input[type="file"]').first
+            if existing.count():
+                existing.set_input_files(cv)
+                page.wait_for_timeout(500)
+                return True
+            try:
+                with page.expect_file_chooser(timeout=3_000) as chooser:
+                    item.click(timeout=5_000)
+                chooser.value.set_files(cv)
+            except PlaywrightError:
+                # Certains sites révèlent un input caché au lieu d'ouvrir le sélecteur natif.
+                upload = page.locator('input[type="file"]').first
+                if upload.count():
+                    upload.set_input_files(cv)
+                else:
+                    return True  # le clic a pu naviguer vers l'étape suivante
+            page.wait_for_timeout(500)
+            return True
+        except PlaywrightError:
+            continue
+    return False
 
 
 def _wait_for_application_ui(page, provider: str, timeout_ms: int = RENDER_WAIT_MS) -> str:
@@ -733,6 +1193,8 @@ class _Supervision:
         self.journal = application_supervisor.Journal(_proof_directory(attempt), attempt["id"])
         self.available = self.mode != "off"
         self.last_hash = None
+        self.seen_frames: set[str] = set()  # cadres intégrés déjà ouverts directement : jamais deux fois
+        self.candidate = candidate
         facts = self._document_facts(files or {})
         # Le profil prime ; le CV et la lettre envoyés complètent ce qui lui manque (LinkedIn, adresse…),
         # y compris pour les règles automatiques qui lisent ``candidate``.
@@ -772,6 +1234,119 @@ def _ai_intervention(attempt: dict, kind: str, decision: dict, message: str, **e
                   **extra)
 
 
+COUNT_CONTROLS_JS = r"""() => [...document.querySelectorAll('input,select,textarea')].filter(el =>
+  !['hidden', 'submit', 'button'].includes((el.type || '').toLowerCase())
+  && (el.getClientRects().length > 0 || (el.type || '').toLowerCase() === 'file')).length"""
+
+
+def _promote_form_frame(page, seen: set[str]) -> str | None:
+    """Formulaire affiché dans un cadre intégré (iCIMS…) : l'onglet ouvre directement l'adresse du cadre.
+
+    Le formulaire devient alors la page elle-même, et tout le parcours (instantané de l'IA, remplissage,
+    relecture, envoi protégé) s'applique sans changement. Les cadres de captcha ne sont jamais suivis.
+    Renvoie « promoted », « login » (cadre déjà ouvert une fois qui demande un mot de passe : le site se
+    ré-encadre, c'est une connexion à faire par toi) ou ``None``.
+    """
+    try:
+        if page.evaluate(COUNT_CONTROLS_JS) >= 2:
+            return None
+        for frame in page.frames[1:]:
+            url = frame.url or ""
+            if not url.startswith("http") or "captcha" in url.casefold() or "challenges.cloudflare" in url:
+                continue
+            if frame.evaluate(COUNT_CONTROLS_JS) < 3 and not frame.locator('input[type="password"]').count():
+                continue
+            key = url.split("#")[0]
+            if key in seen:
+                if frame.locator('input[type="password"]').count():
+                    return "login"
+                continue
+            seen.add(key)
+            page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            return "promoted"
+    except PlaywrightError:
+        return None
+    return None
+
+
+def _navigation_click(page, target) -> None:
+    """Clic de navigation (ouvrir, fermer, cookies, suivant), jamais l'envoi final.
+
+    Une fenêtre surgissante qui intercepte les clics (Welcome to the Jungle) est d'abord fermée par
+    Échap ; en dernier recours, l'événement est remis directement à l'élément visé.
+    """
+    try:
+        target.click(timeout=5_000)
+        return
+    except PlaywrightError:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+    try:
+        target.click(timeout=3_000)
+    except PlaywrightError:
+        target.dispatch_event("click", timeout=3_000)
+
+
+def _clickable(page, button) -> bool:
+    """Essai à blanc du bouton d'envoi : une fenêtre qui l'intercepte est fermée par Échap, sinon on s'arrête."""
+    for attempt in range(2):
+        try:
+            button.click(trial=True, timeout=5_000)
+            return True
+        except PlaywrightError:
+            if not attempt:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
+    return False
+
+
+FORM_KINDS = {"application_form", "multi_step_form"}
+AI_CONTAINER_JS = r"""(ids) => {
+  const fields = 'input:not([type=hidden]),select,textarea';
+  const controls = ids.map(id => document.querySelector(`[data-jobradar-id="${id}"]`)).filter(Boolean);
+  if (!controls.length) return false;
+  // Le dépôt du CV est souvent un champ caché que l'IA ne désigne pas : le bloc l'englobe aussi.
+  controls.push(...document.querySelectorAll('input[type=file]'));
+  const forms = new Set(controls.map(el => el.closest('form')));
+  let target = forms.size === 1 && !forms.has(null) ? [...forms][0] : controls[0].parentElement;
+  while (target && !controls.every(el => target.contains(el))) target = target.parentElement;
+  const action = 'button,[role=button],input[type=submit],input[type=button]';
+  while (target && target !== document.body && !target.querySelector(action)) target = target.parentElement;
+  if (!target || !target.querySelector(fields) || !target.getClientRects().length) return false;
+  document.querySelectorAll('[data-jobradar-form]').forEach(el => el.removeAttribute('data-jobradar-form'));
+  target.setAttribute('data-jobradar-form', '');
+  return true;
+}"""
+
+
+def _ai_form(page, decision: dict | None, snap: dict | None = None):
+    """Formulaire que l'IA reconnaît mais pas les règles (libellés atypiques, composants maison).
+
+    Le bloc retenu englobe les champs et le bouton désignés par l'IA dans l'instantané qu'elle vient de
+    lire ; la suite (plan de remplissage, relecture, envoi protégé) est exactement celle des règles.
+    """
+    if not decision or decision["page_kind"] not in FORM_KINDS:
+        return None
+    actions = decision["actions"]
+    if any(item["type"] == "click" and item["purpose"] == "open_application" for item in actions):
+        return None  # la candidature est encore à ouvrir (fenêtre fermée, bouton « Postuler »)
+    ids = [item["id"] for item in actions if item["type"] in {"fill", "upload", "select", "check"}]
+    if not ids and snap:
+        # Rien que l'IA puisse remplir (question sensible seule, « Gender ») : les champs obligatoires visibles
+        # forment le bloc, pour que la question te soit posée au lieu d'un arrêt « pas un formulaire ».
+        ids = [item["id"] for item in snap["elements"] if item.get("required")
+               and item["tag"] in {"input", "select", "textarea"} and item.get("type") != "file"]
+    if not ids:
+        return None
+    ids += [item["id"] for item in actions if item["type"] == "click" and item["purpose"] in {"submit", "next_step"}]
+    try:
+        if not page.evaluate(AI_CONTAINER_JS, ids):
+            return None
+        return _marked_match(page)
+    except (PlaywrightError, ValueError):
+        return None
+
+
 def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, hints: dict):
     """L'IA pilote l'ouverture de la candidature jusqu'à un formulaire reconnu.
 
@@ -780,14 +1355,51 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
     """
     from . import application_flow  # évite une dépendance circulaire au chargement
     login_attempted = False
+    stalled = loading_waited = False
     for _ in range(application_supervisor.MAX_DECISIONS):
         try:
             return provider, _live_form(page, provider), page
         except (application_adapters.NotApplicationForm, ValueError):
             pass
+        listboxes = _listbox_form(page)
+        if listboxes is not None:
+            supervision.journal.note("Questions à choix (listes déroulantes du site) : remplissage.")
+            return provider, listboxes, page
+        framed = _promote_form_frame(page, supervision.seen_frames)
+        if framed == "promoted":
+            supervision.journal.note(f"Formulaire affiché dans un cadre intégré : ouverture directe de {page.url}")
+            _claim_tab(page, attempt)
+            _wait_for_application_ui(page, provider, timeout_ms=8_000)
+            continue
+        if framed == "login":
+            supervision.journal.note("Connexion demandée dans un cadre intégré.")
+            outcome, page = _wait_for_user(page, attempt, provider, supervision, "login")
+            if outcome == "ready":
+                supervision.journal.note("Étape terminée de ton côté : reprise automatique.")
+                supervision.last_hash = None
+                continue
+            _after_human_step(attempt, outcome, page)
+            return None
         snap, decision = supervision.decide(page, hints=hints)
         if decision is None:
             return UNRESOLVED
+        if len(snap["elements"]) < 5 and not loading_waited:
+            # Page encore en construction (application Workday après rechargement) : on la relit une fois chargée.
+            loading_waited = True
+            supervision.journal.note("Page presque vide : attente de la fin du chargement.")
+            _settle(page)
+            page.wait_for_timeout(3_000)
+            continue
+        if snap["hash"] == supervision.last_hash and not stalled:
+            # Clic parti avant que la page soit prête, ou masqué par un bandeau : une seconde chance.
+            stalled = True
+            cookie = _dismiss_cookies(page)
+            supervision.journal.note("Le clic n'a rien changé : " + (f"bandeau « {cookie} » fermé, " if cookie else "")
+                                     + "nouvel essai après une courte attente.")
+            page.wait_for_timeout(3_000)
+            hints = hints | {"clic_precedent_sans_effet": True}
+            supervision.last_hash = None
+            continue
         if snap["hash"] == supervision.last_hash:
             supervision.journal.decision(page, snap, decision, ["aucun progrès depuis l'étape précédente"])
             _ai_intervention(attempt, "no_progress", decision,
@@ -822,6 +1434,11 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
             return None
         clicks = [item for item in decision["actions"]
                   if item["type"] == "click" and item["purpose"] in application_supervisor.NAVIGATION_PURPOSES]
+        match = _ai_form(page, decision, snap) if kind in FORM_KINDS else None
+        if match is not None:
+            supervision.journal.decision(page, snap, decision, ["formulaire reconnu par l'IA : remplissage"])
+            supervision.last_hash = None
+            return provider, match, page
         if not clicks:
             stop = next((item["reason"] for item in decision["actions"] if item["type"] == "stop"), "")
             supervision.journal.decision(page, snap, decision, [f"arrêt : {stop}" if stop else "aucune action sûre"])
@@ -834,7 +1451,7 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
             before = set(page.context.pages)
             target = page.locator(f'[data-jobradar-id="{item["id"]}"]').first
             try:
-                target.click(timeout=10_000)
+                _navigation_click(page, target)
             except PlaywrightError as exc:
                 executed.append(f"clic n°{item['id']} ({item['purpose']}) impossible : {exc.message[:120]}")
                 continue
@@ -844,6 +1461,7 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
             if opened:
                 page = opened.pop()
                 page.wait_for_load_state("domcontentloaded", timeout=45_000)
+                _claim_tab(page, attempt)
             if item["purpose"] in {"open_application", "next_step"}:
                 break  # la page a changé : les numéros suivants ne sont plus fiables
         supervision.journal.decision(page, snap, decision, executed)
@@ -882,6 +1500,22 @@ def _locate(page, attempt: dict, provider: str, step: int, supervision: _Supervi
         located = _application_form(page, attempt, provider, follow_link=False, report=False)
         if located != UNRESOLVED:
             return located
+        if _promote_form_frame(page, supervision.seen_frames) == "promoted":
+            supervision.journal.note(f"Étape {step + 1} dans un cadre intégré : ouverture directe de {page.url}")
+            _wait_for_application_ui(page, provider, timeout_ms=8_000)
+            try:
+                return provider, _live_form(page, provider), page
+            except (application_adapters.NotApplicationForm, ValueError):
+                pass
+        listboxes = _listbox_form(page)
+        if listboxes is not None:
+            supervision.journal.note(f"Étape {step + 1} : questions à choix (listes déroulantes du site).")
+            return provider, listboxes, page
+        snap, decision = supervision.decide(page, hints={"etape_du_formulaire": step + 1})
+        match = _ai_form(page, decision, snap)
+        if match is not None:
+            supervision.journal.decision(page, snap, decision, [f"étape {step + 1} reconnue par l'IA"])
+            return provider, match, page
         _intervention(attempt["id"], "not_application_form",
                       f"L'étape {step + 1} du formulaire n'a pas été reconnue. Rien n'a été envoyé.",
                       action="manual_fallback")
@@ -947,6 +1581,8 @@ def _supervise_form(form, page, plan: dict, supervision: _Supervision, files: di
                 value = cache["message"]
             except (ai.AIError, ValueError):
                 value = None
+        elif action["type"] == "fill" and action["source"] == "lettre":
+            value = application_adapters.full_letter(cache.get("letter_paragraphs"), field.get("maxlength"))
         elif action["type"] == "upload" and files.get(action["source"]):
             value = files[action["source"]]
         elif action["type"] == "select" and action["option"] in (field.get("options") or []):
@@ -995,11 +1631,22 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
     """Parcourt le formulaire ; renvoie « submitted » si l'envoi est confirmé, sinon une intervention est posée."""
     page = _resume_page(context, attempt)
     resumed = page is not None
+    if (resumed and (attempt.get("intervention") or {}).get("kind") != "resume"
+            and "myworkdayjobs" not in page.url):
+        # Reprise après une erreur : le formulaire repart propre, sans les saisies d'une tentative précédente.
+        # Après une étape faite par toi (connexion, compte), ou sur Workday dont le parcours en plusieurs
+        # étapes se perdrait, l'onglet est gardé tel quel.
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=45_000)
+            _settle(page)
+        except PlaywrightError:
+            pass
     if not resumed:
         page = context.new_page()
         page.goto(attempt["target_url"], wait_until="domcontentloaded", timeout=45_000)
+    _claim_tab(page, attempt)
     supervision = _Supervision(attempt, candidate, files)
-    supervision.journal.note(f"{'Reprise dans l’onglet laissé ouvert' if resumed else 'Ouverture'} de {page.url} "
+    supervision.journal.note(f"{'Reprise dans l’onglet déjà ouvert' if resumed else 'Ouverture'} de {page.url} "
                              f"(supervision IA : {supervision.mode})")
     collected: dict[str, dict] = {}
     final_submit = None
@@ -1007,6 +1654,10 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
     # Une page générique peut mener, via « Postuler », à un formulaire Workday en plusieurs étapes.
     max_steps = WORKDAY_MAX_STEPS if provider in {"workday", "generic"} else 1
     for step in range(max_steps):
+        if step == 0 and not resumed:
+            if _choose_resume_method(page, files):
+                supervision.journal.note("Méthode de candidature avec CV sélectionnée automatiquement.")
+                _wait_for_application_ui(page, provider, timeout_ms=8_000)
         visible = page.locator("body").inner_text(timeout=5000).casefold()
         if _blocked(page, visible):
             logged_in = False
@@ -1023,14 +1674,30 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
         if located is None:
             return None
         provider, match, page = located
+        _claim_tab(page, attempt)
+        if any(field.kind == "password" for field in match.fields):
+            # Workday et d'autres demandent un compte au milieu du parcours : étape humaine, puis reprise.
+            visible = page.locator("body").inner_text(timeout=5000).casefold()
+            outcome, page = _wait_for_user(page, attempt, provider, supervision, _human_step_kind(page, visible))
+            if outcome != "ready":
+                _after_human_step(attempt, outcome, page)
+                return None
+            supervision.journal.note("Étape terminée de ton côté : reprise automatique.")
+            continue
         # Remplissage, relecture et envoi restent confinés au formulaire de candidature reconnu :
         # un formulaire de recherche ou de newsletter de la même page n'est jamais touché.
-        if not _mark_application_container(page) and not page.locator("[data-jobradar-form]").count():
+        # Un bloc déjà marqué qui contient tous les champs prévus reste la cible : chez Thales, le dépôt
+        # du CV est hors de la balise <form> que les règles marqueraient à sa place.
+        marked = page.locator("[data-jobradar-form]")
+        keep = bool(marked.count()) and all(marked.first.locator(field.selector).count() for field in match.fields)
+        if not keep and not _mark_application_container(page) and not _mark_provider_form(page, provider) \
+                and not marked.count():
             _intervention(attempt["id"], "not_application_form",
                           "Le formulaire détecté a disparu avant le remplissage. Rien n'a été envoyé.")
             return None
         form = page.locator(match.selector).first
         plan = application_adapters.fill_plan(match.fields, candidate, files, ai_metadata=True)
+        plan = _paste_resume(plan, files)
         application = db.get_application(attempt["application_id"])
         lang, letter_text, cache = application.get("language") or "fr", "", {}
         try:
@@ -1056,7 +1723,15 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
                                            application, letter_text, lang)
         plan = _merge_user_answers(plan, attempt.get("answers") or [])
         _fill(form, plan)
+        if any(item["kind"] == "file" for item in plan["values"]):
+            _settle(page)  # le site analyse souvent le CV déposé avant d'accepter la suite (Phenom, Workday)
         verification_issues = _verify_filled(form, plan)
+        if verification_issues:
+            # Champ vidé par un nouveau rendu de la page : une seule nouvelle saisie des champs en écart.
+            labels = {issue["label"] for issue in verification_issues}
+            page.wait_for_timeout(1_000)
+            _fill(form, {"values": [item for item in plan["values"] if item["label"] in labels]})
+            verification_issues = _verify_filled(form, plan)
         collected.update({item["selector"]: item for item in plan["values"]})
         combined = {"values": list(collected.values()), "interventions": plan["interventions"],
                     "ready": plan["ready"]}
@@ -1066,6 +1741,9 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
                           fields=verification_issues, preview=_preview(combined), action="verify")
             return None
         validation_errors = _validation_errors(page)
+        if validation_errors and _retry_phone_national(form, page, plan, validation_errors):
+            supervision.journal.note("Téléphone refusé au format international : ressaisi au format 0xxxxxxxxx.")
+            validation_errors = _validation_errors(page)
         if validation_errors:
             _intervention(attempt["id"], "page_validation_failed",
                           "Le formulaire signale des erreurs. Aucun envoi n'a été effectué.",
@@ -1080,15 +1758,39 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
         if provider != "workday":
             if designated and designated[0] == "next_step":
                 # Formulaire en plusieurs étapes : « Suivant » n'envoie rien, on passe à l'étape suivante.
+                before = application_supervisor.snapshot(page)["hash"]
                 designated[1].click(timeout=10_000)
+                page.wait_for_timeout(1500)
+                if application_supervisor.snapshot(page)["hash"] == before:
+                    # Le site finissait peut-être un traitement (analyse du CV) : un second essai, plus tard, sur
+                    # le bouton « Next / Suivant » visible de la page (l'IA a pu désigner un bouton voisin).
+                    _settle(page)
+                    page.wait_for_timeout(3_000)
+                    named = page.get_by_role("button", name=NEXT_LABELS)
+                    retry = next((named.nth(index) for index in range(named.count()) if named.nth(index).is_visible()),
+                                 designated[1] if designated[1].count() else None)
+                    if retry is not None:
+                        retry.click(timeout=10_000)
+                        page.wait_for_timeout(2_000)
+                if application_supervisor.snapshot(page)["hash"] == before:
+                    errors = _validation_errors(page)
+                    _intervention(attempt["id"], "page_validation_failed",
+                                  "« Suivant » n'a pas fait avancer le formulaire. Aucun envoi n'a été effectué.",
+                                  fields=[{"label": message, "reason": "erreur affichée par le site"}
+                                          for message in errors] or
+                                         [{"label": "Aucun message d'erreur visible", "reason": "page inchangée"}],
+                                  preview=_preview(combined), action="verify")
+                    return None
                 supervision.journal.note(f"Étape {step + 1} remplie, passage à l'étape suivante.")
-                page.wait_for_timeout(1000)
                 continue
             if designated and designated[0] == "submit":
                 final_submit = designated[1]
             plan = combined
             break
         navigation, is_final = _workday_navigation(page)
+        if navigation is None and designated:
+            # Bouton hors des repères Workday habituels : celui que l'IA a désigné dans le formulaire.
+            navigation, is_final = designated[1], designated[0] == "submit"
         if navigation is None:
             _intervention(attempt["id"], "navigation_missing",
                           "Le bouton permettant de poursuivre sur Workday est introuvable.",
@@ -1123,6 +1825,11 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
                     if form.locator(selector).count()), None))
     if submit is None:
         _intervention(attempt["id"], "submit_missing", "Bouton d'envoi introuvable.")
+        return None
+    if not _clickable(page, submit):
+        _intervention(attempt["id"], "submit_blocked",
+                      "Une fenêtre recouvre le bouton d'envoi. Rien n'a été envoyé : ferme-la puis clique « Reprendre ».",
+                      preview=_preview(plan), action="resume")
         return None
     # À partir d'ici la candidature peut être partie : le fait est enregistré avant le clic,
     # pour qu'aucune reprise (Réessayer, redémarrage) ne puisse la renvoyer.

@@ -31,7 +31,7 @@
     if (intervention.kind !== "missing_fields" || !(intervention.fields || []).length) return "";
     return `<form class="apply-field-form" data-answer-attempt="${attempt.id}"><h4>Informations nécessaires</h4>
       ${(intervention.fields || []).map((field, index) => `<label>${esc(field.label)}${field.kind === "sensitive" ? `<small class="apply-sensitive">Question sensible : réponds uniquement si tu souhaites transmettre cette information.</small>` : ""}
-        ${field.input_kind === "select" && field.options?.length
+        ${["select", "radio", "listbox"].includes(field.input_kind) && field.options?.length
           ? `<select data-field-index="${index}" required><option value="">Choisir…</option>${field.options.map(option => `<option value="${esc(option)}">${esc(option)}</option>`).join("")}</select>`
           : field.input_kind === "checkbox"
             ? `<select data-field-index="${index}" required><option value="">Choisir…</option><option value="true">Oui</option><option value="false">Non</option></select>`

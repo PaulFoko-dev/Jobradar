@@ -209,6 +209,15 @@ def test_long_country_lists_show_the_options_matching_the_profile(monkeypatch) -
     assert decision["actions"][0]["option"] == "France" and not decision["rejected"]
 
 
+def test_letter_can_only_fill_a_text_area() -> None:
+    snap = _snap({"tag": "textarea", "label": "Lettre de motivation"}, {"tag": "input", "type": "text", "label": "Ville"})
+    raw = _decision({"type": "fill", "id": 1, "source": "lettre"}, {"type": "fill", "id": 2, "source": "lettre"})
+
+    decision = application_supervisor.validate(raw, snap, application_supervisor.profile_values(CANDIDATE))
+
+    assert [action["id"] for action in decision["actions"]] == [1]
+    assert decision["rejected"][0]["reason"] == "source hors du profil"
+
 def test_supervision_mode_is_a_browser_setting(monkeypatch) -> None:
     monkeypatch.undo()  # retire la désactivation automatique des tests
     from jobradar import config
@@ -271,6 +280,94 @@ ACCOUNT = """<!doctype html><html lang="fr"><body><main id="page"><h1>Créer un 
 <label for="resume">CV *</label><input id="resume" name="resume" type="file" required>
 <button type="submit">Envoyer ma candidature</button></form>`; }, 2000);</script></body></html>"""
 
+# Le site refuse « +33 … » et n'accepte que 0xxxxxxxxx.
+NATIONAL = """<!doctype html><html lang="fr"><body><form action="/envoi" method="post" enctype="multipart/form-data">
+<label for="email">E-mail *</label><input id="email" name="email" type="email" required>
+<label for="tel">Téléphone *</label><input id="tel" name="tel" type="tel" required>
+<p id="err" role="alert"></p>
+<label for="resume">CV *</label><input id="resume" name="resume" type="file" required>
+<button type="submit">Envoyer ma candidature</button></form>
+<script>tel.addEventListener('blur', () => err.textContent = /^0\d{9}$/.test(tel.value) ? '' :
+  'Numéro de téléphone invalide');</script></body></html>"""
+
+# Workday : après « Postuler », une page de création de compte (e-mail + mot de passe) puis, 2 s plus tard,
+# « l'utilisateur » a créé son compte et la candidature s'affiche.
+MID_ACCOUNT = """<!doctype html><html lang="fr"><body><main id="page"><h1>Create Account</h1>
+<form method="post"><label for="mail">Email Address *</label><input id="mail" name="mail" type="email" required>
+<label for="pw">Password *</label><input id="pw" name="pw" type="password" required>
+<button type="button">Create Account</button></form></main>
+<script>setTimeout(() => { document.getElementById('page').innerHTML = `<h1>Candidature</h1>
+<form action="/envoi" method="post" enctype="multipart/form-data">
+<label for="email">E-mail *</label><input id="email" name="email" type="email" required>
+<label for="resume">CV *</label><input id="resume" name="resume" type="file" required>
+<button type="submit">Envoyer ma candidature</button></form>`; }, 2500);</script></body></html>"""
+
+# iCIMS : la connexion s'affiche dans un cadre et se ré-encadre si on l'ouvre directement.
+REFRAMED = """<!doctype html><html lang="fr"><body><header><a href="/">Schneider</a></header>
+<iframe src="/connexion-cadre" style="width:900px;height:700px"></iframe></body></html>"""
+REFRAMED_LOGIN = """<!doctype html><html lang="fr"><body><form method="post">
+<label for="u">E-mail</label><input id="u" name="u" type="email"><label for="p">Mot de passe</label>
+<input id="p" name="p" type="password"><label for="r">Se souvenir</label><input id="r" name="r" type="text">
+<button type="submit">Connexion</button></form>
+<script>if (window.top === window) document.body.innerHTML =
+  '<iframe src="/connexion-cadre" style="width:900px;height:700px"></iframe>';</script></body></html>"""
+
+# Étape « Voluntary Disclosures » : une seule question, sensible et obligatoire.
+SENSITIVE_ONLY = """<!doctype html><html lang="fr"><body><main><h1>Voluntary Disclosures</h1><div class="etape">
+<label for="gender">Please specify your Gender *</label><select id="gender" name="gender" required>
+<option value="">Choisir</option><option>Male</option><option>Female</option><option>Prefer not to say</option>
+</select><button type="button">Suivant</button></div></main></body></html>"""
+
+# Workday, étape « Application Questions » : seulement des listes maison, puis l'envoi.
+LISTBOX_STEP = """<!doctype html><html lang="fr"><body><main><div class="questions">
+<div data-automation-id="formField-q1"><label>Have you worked with us before?*</label>
+<button type="button" aria-haspopup="listbox" id="q1">Select One</button></div>
+<button type="button" id="send">Envoyer ma candidature</button></div>
+<ul role="listbox" id="list" hidden><li role="option">Yes</li><li role="option">No</li></ul></main>
+<script>q1.onclick = () => list.hidden = false;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') list.hidden = true; });
+list.querySelectorAll('li').forEach(li => li.onclick = () => { q1.textContent = li.textContent; list.hidden = true; });
+send.onclick = async () => { await fetch('/envoi-json', {method: 'POST', body: q1.textContent}); location.href = '/merci'; };
+</script></body></html>"""
+
+# « Continuer » ne fait rien (erreur silencieuse du site) : jamais de boucle sur la même étape.
+STALLED_NEXT = """<!doctype html><html lang="fr"><body><main><div class="etape">
+<label for="email">E-mail *</label><input id="email" name="email" type="email" required>
+<label for="name">Nom complet *</label><input id="name" name="name" required>
+<label for="resume">CV *</label><input id="resume" name="resume" type="file" required>
+<button type="button">Continuer</button></div></main></body></html>"""
+
+# iCIMS : la page ne montre qu'un cadre intégré qui contient tout le formulaire.
+FRAMED = """<!doctype html><html lang="fr"><body><header><a href="/">Orange</a></header>
+<iframe src="/formulaire-cadre" style="width:900px;height:700px"></iframe></body></html>"""
+FRAME_FORM = """<!doctype html><html lang="fr"><body><form action="/envoi" method="post" enctype="multipart/form-data">
+<label for="email">E-mail *</label><input id="email" name="email" type="email" required>
+<label for="name">Nom complet *</label><input id="name" name="name" required>
+<label for="resume">CV *</label><input id="resume" name="resume" type="file" required>
+<button type="submit">Envoyer ma candidature</button></form></body></html>"""
+
+# Choisir le pays reconstruit les coordonnées et vide l'e-mail déjà saisi (Thales).
+RESET = """<!doctype html><html lang="fr"><body><main><h1>Candidature</h1>
+<form action="/envoi" method="post" enctype="multipart/form-data">
+<label for="email">E-mail *</label><input id="email" name="email" type="email" required>
+<label for="country">Pays *</label><select id="country" name="country" required>
+<option value="">Choisir</option><option>France</option></select>
+<label for="resume">CV *</label><input id="resume" name="resume" type="file" required>
+<button type="submit">Envoyer ma candidature</button></form></main>
+<script>country.onchange = () => { email.value = ''; };</script></body></html>"""
+
+# Formulaire maison : ni balise <form>, ni « e-mail » ni « nom » lisibles par les règles.
+UNUSUAL = """<!doctype html><html lang="fr"><body><main><h1>Rejoignez-nous</h1><div class="bloc">
+<label for="q1">Comment vous appelez-vous ? *</label><input id="q1" name="q1" required>
+<label for="q2">Adresse électronique *</label><input id="q2" name="q2" required>
+<button type="button" id="send">Envoyer ma candidature</button></div></main>
+<script>document.getElementById('send').onclick = async () => {
+  await fetch('/envoi-json', {method: 'POST', body: JSON.stringify({q1: q1.value, q2: q2.value})});
+  location.href = '/merci'; };</script></body></html>"""
+
+# Fenêtre surgissante qui intercepte tous les clics et ne se ferme pas (Welcome to the Jungle).
+OVERLAY = INTERESTED.replace("<main>", '<div style="position:fixed;inset:0;z-index:9;background:#0003"></div><main>')
+
 STUCK = """<!doctype html><html lang="fr"><body><main><h1>Stage SOC</h1>
 <button type="button">Je suis intéressé(e)</button></main></body></html>"""
 
@@ -280,6 +377,8 @@ class _Site(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - API de http.server
         pages = {"/interesse": INTERESTED, "/etapes": MULTI_STEP, "/cloturee": CLOSED, "/bloquee": STUCK, "/compte": ACCOUNT,
+                 "/atypique": UNUSUAL, "/surgissante": OVERLAY, "/pays": RESET, "/cadre": FRAMED, "/telephone": NATIONAL, "/suivant-bloque": STALLED_NEXT, "/compte-workday": MID_ACCOUNT,
+                 "/cadre-connexion": REFRAMED, "/genre": SENSITIVE_ONLY, "/listes": LISTBOX_STEP, "/connexion-cadre": REFRAMED_LOGIN, "/formulaire-cadre": FRAME_FORM,
                  "/compte-en-cours": ACCOUNT.split("<script>")[0] + "</body></html>",
                  "/merci": "<html><body><h1>Merci pour votre candidature</h1></body></html>"}
         body = pages.get(self.path)
@@ -371,6 +470,12 @@ def _scripted_ai(monkeypatch) -> list[dict]:
             text, label = element["text"].casefold(), element["label"].casefold()
             if "intéress" in text:
                 actions.append({"type": "click", "id": element["id"], "purpose": "open_application"})
+            elif "appelez" in label:
+                actions.append({"type": "fill", "id": element["id"], "source": "full_name"})
+            elif "électronique" in label:
+                actions.append({"type": "fill", "id": element["id"], "source": "email"})
+            elif element["tag"] == "select" and "pays" in label:
+                actions.append({"type": "select", "id": element["id"], "option": "France"})
             elif element["tag"] == "select" and "niveau" in label:
                 actions.append({"type": "select", "id": element["id"], "option": "Bac+5"})
             elif element["type"] == "checkbox":
@@ -453,7 +558,9 @@ def test_click_without_effect_stops_instead_of_looping(client, site, supervised_
     saved = db.get_application_attempt(attempt["id"])
     assert saved["intervention"]["kind"] == "no_progress", saved
     assert "Analyse de l'IA" in saved["intervention"]["message"]
-    assert len(calls) == 2
+    # Une attente de chargement (page minuscule), une seconde chance (clic trop tôt, bandeau), puis arrêt.
+    assert len(calls) == 5 and calls[-1]["indices_du_programme"]["clic_precedent_sans_effet"] is True
+    assert "Le clic n'a rien changé" in _journal(attempt)
 
 
 def test_unavailable_ai_falls_back_to_the_rules_without_blocking(client, site, supervised_browser,
@@ -483,6 +590,22 @@ def test_robot_resumes_by_itself_once_the_account_is_created(client, site, super
     assert saved["status"] == "submitted", saved
     journal = _journal(attempt)
     assert "En attente de toi : Crée ton compte" in journal and "reprise automatique" in journal
+    # Avant de passer la main, l'e-mail connu est déjà saisi ; le mot de passe reste pour toi.
+    assert "Champs connus pré-remplis avant de te passer la main : E-mail" in journal
+    assert "Déjà rempli pour toi : E-mail." in journal
+
+
+def test_ai_fills_a_form_the_rules_do_not_recognise(client, site, supervised_browser, monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/atypique")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "submitted", (saved["intervention"], _journal(attempt))
+    (path, body), = _Site.posts
+    assert path == "/envoi-json" and json.loads(body) == {"q1": "Camille Durand", "q2": "camille@example.test"}
+    assert "formulaire reconnu par l'IA" in _journal(attempt)
 
 
 def test_unfinished_account_creation_is_parked_and_resumed_from_its_tab(client, site, supervised_browser,
@@ -505,17 +628,186 @@ def test_unfinished_account_creation_is_parked_and_resumed_from_its_tab(client, 
     queued = application_flow.retry(attempt["id"])
     assert queued["intervention"] == {"kind": "resume", "resume_url": f"{site}/compte-en-cours"}
 
-    class Tab:
-        def __init__(self, url):
-            self.url, self.front = url, False
-
-        def is_closed(self):
-            return False
-
-        def bring_to_front(self):
-            self.front = True
-
-    mine, other = Tab(f"{site}/compte-en-cours?etape=2"), Tab("https://mail.example.test/inbox")
+    mine, other = _Tab(f"{site}/compte-en-cours?etape=2"), _Tab("https://mail.example.test/inbox")
     context = type("Context", (), {"pages": [mine, other]})()
     assert application_browser._resume_page(context, queued) is mine and mine.front
-    assert application_browser._resume_page(context, {"intervention": None}) is None
+    assert application_browser._resume_page(context, {"application_id": -1, "intervention": None}) is None
+
+
+class _Tab:
+    def __init__(self, url, owner=None):
+        self.url, self.owner, self.front = url, owner, False
+
+    def is_closed(self):
+        return False
+
+    def evaluate(self, _script, _key):
+        return self.owner
+
+    def bring_to_front(self):
+        self.front = True
+
+
+def test_resume_reuses_the_tab_jobradar_marked_instead_of_opening_a_duplicate(client, site) -> None:
+    attempt = _claimed_attempt(client, f"{site}/offre")
+    application_id = str(attempt["application_id"])
+    marked_offer = _Tab(f"{site}/offre", application_id)
+    marked_form = _Tab(f"{site}/candidature/etape-2", application_id)
+    yours = _Tab(f"{site}/autre-offre")  # même site, autre page à toi : jamais prise
+    other_offer = _Tab(f"{site}/offre", "999")  # marquée pour une autre candidature
+    application_browser._claim_tab(type("Page", (), {"url": marked_form.url, "evaluate": lambda *_a: None})(),
+                                   attempt)
+
+    context = type("Context", (), {"pages": [marked_offer, marked_form, yours, other_offer]})()
+    assert application_browser._resume_page(context, attempt) is marked_form and marked_form.front
+
+    # Sans onglet marqué, seul un onglet libre à l'adresse exacte de l'offre est repris.
+    context.pages = [yours, other_offer]
+    assert application_browser._resume_page(context, attempt) is None
+    free = _Tab(f"{site}/offre?utm=x")
+    context.pages = [yours, free]
+    assert application_browser._resume_page(context, attempt) is free
+
+
+def test_popup_intercepting_clicks_does_not_block_the_application(client, site, supervised_browser,
+                                                                  monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/surgissante")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    # La fenêtre ne bloque plus l'ouverture ; elle recouvre encore l'envoi : arrêt propre, rien n'est parti
+    # et la tentative reste relançable (aucun clic d'envoi enregistré).
+    assert saved["intervention"]["kind"] == "submit_blocked", (saved["intervention"], _journal(attempt))
+    assert not saved["submit_clicked_at_utc"] and _Site.posts == []
+    assert "open_application) :" in _journal(attempt) and "impossible" not in _journal(attempt)
+
+
+def test_a_list_that_clears_other_fields_is_filled_first(client, site, supervised_browser, monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/pays")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "submitted", (saved["intervention"], _journal(attempt))
+    (_, body), = _Site.posts
+    assert b"camille@example.test" in body and b"France" in body
+
+
+def test_form_inside_an_iframe_is_opened_directly(client, site, supervised_browser, monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/cadre")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "submitted", (saved["intervention"], _journal(attempt))
+    assert [path for path, _ in _Site.posts] == ["/envoi"]
+    assert "cadre intégré : ouverture directe" in _journal(attempt)
+
+
+def test_phone_refused_in_international_format_is_retyped_nationally(client, site, supervised_browser,
+                                                                     monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/telephone")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "submitted", (saved["intervention"], _journal(attempt))
+    (_, body), = _Site.posts
+    assert b"0600000000" in body and "format 0xxxxxxxxx" in _journal(attempt)
+
+
+def test_resume_finds_an_unmarked_tab_by_the_offer_identifier(client, site) -> None:
+    target = "https://careers.thalesgroup.com/global/en/job/TGPTGWGLOBALR0343013EXTERNALENGLOBAL/STAGE-H-F?utm=x"
+    attempt = _claimed_attempt(client, target)
+    offer = _Tab(target)
+    form = _Tab("https://careers.thalesgroup.com/global/en/apply?jobSeqNo=TGPTGWGLOBALR0343013EXTERNALENGLOBAL&step=1")
+    other = _Tab("https://careers.thalesgroup.com/global/en/apply?jobSeqNo=TGPTGWGLOBALR0999999EXTERNALENGLOBAL")
+    context = type("Context", (), {"pages": [form, offer, other]})()
+    # Ouvert avant le marquage : reconnu par l'identifiant de l'offre, et l'étape la plus avancée l'emporte.
+    assert application_browser._resume_page(context, attempt) is form and form.front
+    context.pages = [other]
+    assert application_browser._resume_page(context, attempt) is None
+    # Même chemin « /global/en/apply » mais autre offre : jamais repris, même si c'est la dernière adresse connue.
+    (archive.directory_of(attempt["application_id"]) / "envoi").mkdir(exist_ok=True)
+    application_browser._claim_tab(type("Page", (), {"url": form.url, "evaluate": lambda *_a: None})(), attempt)
+    assert application_browser._resume_page(context, attempt) is None
+
+
+def test_next_step_that_does_not_advance_stops_instead_of_looping(client, site, supervised_browser,
+                                                                   monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/suivant-bloque")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["intervention"]["kind"] == "page_validation_failed", (saved["intervention"], _journal(attempt))
+    assert "n'a pas fait avancer" in saved["intervention"]["message"] and _Site.posts == []
+    assert _journal(attempt).count("passage à l'étape suivante") == 0
+
+
+def test_account_form_found_as_a_form_becomes_a_human_step(client, site, supervised_browser, monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/compte-workday")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "submitted", (saved["intervention"], _journal(attempt))
+    journal = _journal(attempt)
+    assert "En attente de toi : Crée ton compte" in journal and "Déjà rempli pour toi : Email Address" in journal
+    assert b"password" not in _Site.posts[0][1].lower()
+
+
+def test_login_that_reframes_itself_is_a_human_step_not_a_loop(client, site, supervised_browser,
+                                                                monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    settings = application_browser.config.browser_settings()
+    monkeypatch.setattr(application_browser.config, "browser_settings", lambda: settings | {"human_wait_minutes": 0})
+    attempt = _claimed_attempt(client, f"{site}/cadre-connexion")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    journal = _journal(attempt)
+    assert saved["intervention"]["kind"] == "waiting_user", (saved["intervention"], journal)
+    assert journal.count("ouverture directe") == 1 and "Connexion demandée dans un cadre intégré" in journal
+
+
+def test_step_with_only_a_sensitive_question_asks_the_user(client, site, supervised_browser, monkeypatch) -> None:
+    _scripted_ai(monkeypatch)
+    attempt = _claimed_attempt(client, f"{site}/genre")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["intervention"]["kind"] == "missing_fields", (saved["intervention"], _journal(attempt))
+    (field,) = saved["intervention"]["fields"]
+    assert field["kind"] == "sensitive" and "Prefer not to say" in field["options"]
+
+
+def test_listbox_question_is_asked_then_answered_from_the_user(client, site, supervised_browser,
+                                                                monkeypatch) -> None:
+    from jobradar import application_flow, application_queue
+    _scripted_ai(monkeypatch)
+    monkeypatch.setattr(application_queue, "wake", lambda: None)
+    monkeypatch.setattr(profile, "remember_form_answers", lambda _answers: None)
+    attempt = _claimed_attempt(client, f"{site}/listes")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["intervention"]["kind"] == "missing_fields", (saved["intervention"], _journal(attempt))
+    (field,) = saved["intervention"]["fields"]
+    assert field["input_kind"] == "listbox" and field["options"] == ["Yes", "No"]
+
+    application_flow.answer_fields(attempt["id"], [{"selector": field["selector"], "value": "No"}])
+    application_browser.process(db.claim_next_application_attempt())
+
+    assert db.get_application_attempt(attempt["id"])["status"] == "submitted", _journal(attempt)
+    assert _Site.posts == [("/envoi-json", b"No")]

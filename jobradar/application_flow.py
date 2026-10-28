@@ -222,7 +222,7 @@ def answer_fields(attempt_id: int, answers: list[dict]) -> dict:
             if not value or len(value) > 2_000:
                 raise ValueError(f"La réponse « {field.get('label')} » est vide ou trop longue.")
             options = field.get("options") or []
-            if field.get("input_kind") in {"select", "radio"} and options and value not in options:
+            if field.get("input_kind") in {"select", "radio", "listbox"} and options and value not in options:
                 raise ValueError(f"La réponse « {field.get('label')} » n'est pas proposée par le formulaire.")
         cleaned.append({"selector": selector, "label": str(field.get("label") or "")[:300],
                         "kind": field.get("input_kind") or "text", "value": value,

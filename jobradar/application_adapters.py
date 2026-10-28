@@ -38,12 +38,13 @@ class Field:
     sensitive: bool = False
     maxlength: int | None = None
     classification: str | None = None
+    group: str = ""  # question commune d'une liste de cases à cocher (« Comment nous avez-vous connus ? »)
 
     def json(self) -> dict:
         return {
             "selector": self.selector, "name": self.name, "label": self.label, "kind": self.kind,
             "required": self.required, "options": list(self.options), "sensitive": self.sensitive,
-            "maxlength": self.maxlength, "classification": self.classification,
+            "maxlength": self.maxlength, "classification": self.classification, "group": self.group,
         }
 
 
@@ -274,6 +275,18 @@ def letter_excerpt(paragraphs: list[str] | None, maxlength: int | None) -> str |
     return message if len(message) >= min(150, limit) else None
 
 
+def full_letter(paragraphs: list[str] | None, maxlength: int | None) -> str | None:
+    """Lettre envoyée en entier, pour un champ qui la demande elle-même ; ``None`` si elle ne tient pas."""
+    letter = "\n\n".join(" ".join(paragraph.split()) for paragraph in paragraphs or []
+                          if isinstance(paragraph, str) and paragraph.strip())
+    return letter if letter and (not maxlength or len(letter) <= maxlength) else None
+
+
+def asks_for_letter(field: dict) -> bool:
+    return field.get("input_kind") == "textarea" and any(
+        term in _fold(field.get("label")) for term in ("lettre", "cover letter"))
+
+
 def motivation_message(candidate: dict, offer: dict, letter_text: str, language: str,
                        maxlength: int | None) -> str:
     """Génère puis valide strictement un court message fondé sur le profil ; une seconde chance motivée."""
@@ -304,7 +317,14 @@ def ai_plan(plan: dict, candidate: dict, offer: dict, letter_text: str = "", lan
     cache = motivation_cache if motivation_cache is not None else {}
     pending = [item for item in plan["interventions"] if item.get("kind") != "sensitive"]
     accepted = {}
-    motivations = [item for item in pending if item.get("classification") == "motivation"]
+    motivations = []
+    for item in (item for item in pending if item.get("classification") == "motivation"):
+        letter = full_letter(cache.get("letter_paragraphs"), item.get("maxlength")) if asks_for_letter(item) else None
+        if letter:
+            accepted[item["selector"]] = {"selector": item["selector"], "value": letter, "kind": "textarea",
+                                          "confidence": 1.0, "source": "document:lettre", "label": item["label"]}
+        else:
+            motivations.append(item)
     if motivations:
         strictest = min((item.get("maxlength") or 600 for item in motivations), default=600)
         message = cache.get("message")
@@ -330,7 +350,7 @@ def ai_plan(plan: dict, candidate: dict, offer: dict, letter_text: str = "", lan
             field = by_selector.get(proposal.get("selector"))
             answer = proposal.get("answer")
             source = _fold(proposal.get("profile_source"))
-            option_ok = field and (field.get("input_kind") not in {"select", "radio"}
+            option_ok = field and (field.get("input_kind") not in {"select", "radio", "listbox"}
                                    or answer in field.get("options", []))
             if field and float(proposal.get("confidence") or 0) >= GENERIC_CONFIDENCE and source in facts and option_ok:
                 accepted[field["selector"]] = {"selector": field["selector"], "value": answer,
@@ -359,27 +379,31 @@ def _label(control: Tag, form: Tag) -> str:
         if form.find(id=value) is not None
     )
     return " ".join(filter(None, [label.get_text(" ", strip=True) if label else "",
-                                   control.get("aria-label"), control.get("placeholder"), described])).strip()
+                                   control.get("aria-label"), control.get("placeholder"), described,
+                                   control.get("data-jobradar-label")])).strip()
 
 
 def _field(control: Tag, form: Tag) -> Field | None:
     input_type = str(control.get("type") or "text").lower()
     if control.name == "input" and input_type in {"hidden", "submit", "button", "reset", "image"}:
         return None
-    name = str(control.get("name") or control.get("id") or "").strip()
-    if not name:
+    # Sans name ni id (Flatchr, composants React), le moteur pose un repère data-jobradar-field.
+    attribute = next((key for key in ("name", "id", "data-jobradar-field") if control.get(key)), None)
+    if attribute is None:
         return None
+    name = str(control.get(attribute)).strip()
     label = _label(control, form) or name
     if control.name == "textarea":
         kind = "textarea"
     elif control.name == "select":
         kind = "select"
-    elif input_type in {"checkbox", "radio", "file", "email", "tel", "number", "url", "date"}:
-        kind = input_type
+    elif input_type in {"checkbox", "radio", "file", "email", "tel", "number", "url", "date", "password"}:
+        kind = input_type  # « password » : création de compte ou connexion, jamais remplie par JobRadar
     else:
         kind = "text"
+    # Une option sans attribut value vaut son texte ; seule value="" marque l'invite « Choisir ».
     options = tuple(option.get_text(" ", strip=True) for option in control.select("option")
-                    if option.get("value") not in {None, ""})
+                    if option.get("value") != "" and option.get_text(strip=True))
     text = _fold(f"{name} {label}")
     sensitive = any(term in text for term in SENSITIVE_TERMS)
     required = control.has_attr("required") or control.get("aria-required") == "true"
@@ -389,8 +413,12 @@ def _field(control: Tag, form: Tag) -> Field | None:
     except (TypeError, ValueError):
         maxlength = None
     classification = classify_text_field(kind, name, label, sensitive)
-    return Field(f"[name={_css_string(name)}]", name, label, kind, required, options, sensitive,
-                 maxlength, classification)
+    # Un champ sans attribut name (dépôt de CV VINCI…) n'est joignable que par son id. Une case à cocher
+    # partage souvent son name avec un champ caché placé avant elle (Rails) : on vise la case elle-même.
+    prefix = 'input[type="checkbox"]' if kind == "checkbox" else ""
+    group = " ".join(str(control.get("data-jobradar-group") or "").split()) if kind == "checkbox" else ""
+    return Field(f"{prefix}[{attribute}={_css_string(name)}]", name, label, kind, required, options, sensitive,
+                 maxlength, classification, group)
 
 
 MOTIVATION_TERMS = (
@@ -438,6 +466,102 @@ def _css_string(value: str) -> str:
     return '"' + "".join(escaped) + '"'
 
 
+MIDDLE_NAME_TERMS = ("deuxieme prenom", "second prenom", "autres prenoms", "middle name", "middlename",
+                     "second name")
+SOURCE_QUESTION_TERMS = ("nous avez connu", "avez vous connu", "avez connu", "connu cette offre", "connu l offre",
+                         "connu notre", "nous connaissez", "how did you hear", "how did you find", "where did you hear",
+                         "where did you find", "par quel biais", "par quel moyen", "comment avez vous trouve",
+                         "ou avez vous trouve", "ou avez vous vu", "origine de votre candidature",
+                         "source of application", "referral source", "source de candidature")
+JOB_BOARD_WORDS = ("linkedin", "indeed", "welcome", "hellowork", "apec", "jobteaser", "glassdoor", "monster",
+                   "job board", "jobboard", "emploi", "salon", "forum", "ecole", "school", "cabinet", "agence",
+                   "fair", "event", "evenement", "university", "universite", "polytechnic", "newspaper", "magazine")
+COMPANY_SITE_WORDS = ("site", "website", "web site", "career page", "careers page", "page carriere",
+                      "page entreprise", "company page")
+# Libellés qui contiennent « name » ou « nom » sans demander le nom du candidat.
+NOT_CANDIDATE_NAME = ("street", "rue", "voie", "company", "entreprise", "societe", "school", "ecole", "user",
+                      "file", "fichier", "project", "projet", "manager", "referent", "reference", "employer",
+                      "employeur", "contact", "university", "universite", "account", "compte")
+ALREADY_SELECTED = re.compile(r"\b[1-9]\d* items? selected\b")
+REGION_TERMS = ("state", "region", "departement", "department", "county", "province")
+PROFILE_KINDS = {"text", "email", "tel", "url", "textarea", "number", "select", "radio", "listbox"}
+
+
+CONSENT_WORDS = ("j accepte", "i agree", "i accept", "consent", "conditions", "politique de confidentialite",
+                 "privacy", "rgpd", "gdpr", "donnees personnelles", "personal data", "terms")
+NEWSLETTER_WORDS = ("newsletter", "offres similaires", "alerte", "job alert", "marketing", "partenaires",
+                    "partners", "promotion", "similar jobs", "update messages", "receive updates", "futures offres",
+                    "future opportunities", "filiales")
+
+
+# « I do not agree », « Je n'accepte pas » : la variante « non » d'une paire de cases n'est jamais cochée.
+NEGATION_WORDS = ("do not", "don t", "not agree", "not accept", "decline", "refuse", "ne pas", "n accepte pas",
+                  "je n accepte", "pas d accord")
+
+
+def is_application_consent(label: object) -> bool:
+    """Consentement au traitement de la candidature (confidentialité, RGPD) ; jamais une newsletter."""
+    text = _fold(label)
+    return (any(word in text for word in CONSENT_WORDS)
+            and not any(word in text for word in (*NEWSLETTER_WORDS, *NEGATION_WORDS)))
+
+
+PHONE_CODE_TERMS = ("phone code", "country code", "dial code", "phone country", "indicatif", "code pays",
+                    "country phone")
+NATIONAL_PREFIXES = ("352", "33", "32", "41")
+
+
+def compact_phone(phone: object) -> str | None:
+    """« +33 7 63 95 67 80 » → « +33763956780 » : les espaces et points font refuser le numéro par certains sites."""
+    digits = re.sub(r"[\s.\-()]", "", str(phone or ""))
+    return digits or None
+
+
+def national_phone(phone: object) -> str | None:
+    """« +33 7 63 95 67 80 » → « 0763956780 », quand l'indicatif est choisi dans une liste à part."""
+    digits = re.sub(r"[\s.\-()]", "", str(phone or ""))
+    if digits.startswith("00"):
+        digits = "+" + digits[2:]
+    code = next((code for code in NATIONAL_PREFIXES if digits.startswith("+" + code)), None)
+    if code is None:
+        return digits if re.fullmatch(r"0\d{9}", digits) else None
+    national = digits[len(code) + 1:]
+    return national if national.startswith("0") else "0" + national
+
+
+def has_phone_code_field(fields: list[Field]) -> bool:
+    return any(any(term in _fold(field.label) for term in PHONE_CODE_TERMS)
+               or (field.kind == "select" and sum("(+" in option for option in field.options) >= 3)
+               for field in fields)
+
+
+def is_source_question(label: object) -> bool:
+    folded = _fold(label)
+    # « Source * » (Workday, Thales) : la question tient en un mot.
+    bare = folded.split()[:2] in (["source"], ["sources"], ["source", "de"], ["referral", "source"])
+    return (bare or any(term in folded for term in SOURCE_QUESTION_TERMS)) and not any(
+        term in folded for term in SENSITIVE_TERMS)
+
+
+def source_answer(options: list[str] | tuple[str, ...]) -> str | None:
+    """Réponse toujours vraie à « Comment nous avez-vous connus ? » : le site de l'entreprise, sinon LinkedIn.
+
+    L'offre est publiée sur le site de l'entreprise et presque toujours relayée sur LinkedIn ; « Autre »
+    ne sert qu'en dernier recours. Une liste sans aucune de ces options reste une question pour toi.
+    """
+    def rank(option: str) -> tuple[int, int] | None:
+        folded = _fold(option)
+        if any(word in folded for word in COMPANY_SITE_WORDS) and not any(word in folded for word in JOB_BOARD_WORDS):
+            return (0, 0)
+        if "linkedin" in folded:
+            return (1, 1 if "post" in folded else 0)  # une offre LinkedIn plutôt qu'une publication
+        if folded in {"autre", "other", "autres", "others"} or folded.startswith(("autre ", "other ")):
+            return (2, 0)
+        return None
+    ranked = [(rank(option), index, option) for index, option in enumerate(options) if rank(option) is not None]
+    return min(ranked)[2] if ranked else None
+
+
 def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *, ai_metadata: bool = False) -> dict:
     """Associe les faits locaux aux champs ; toute ambiguïté obligatoire devient une intervention."""
     identity = candidate.get("identity") if isinstance(candidate.get("identity"), dict) else {}
@@ -448,31 +572,84 @@ def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *
         (("github",), next((url for url in links if "github" in url.casefold()), None)),
         (("portfolio", "site web", "site internet", "website", "personal site", "personal url"),
          next((url for url in links if url and not any(n in url.casefold() for n in ("linkedin", "github"))), None)),
-        (("first name", "prenom", "given name"), _first_name(identity.get("full_name"))),
-        (("last name", "nom de famille", "family name", "surname"), _last_name(identity.get("full_name"))),
+        (("first name", "firstname", "prenom", "given name", "givenname"), _first_name(identity.get("full_name"))),
+        (("last name", "lastname", "nom de famille", "family name", "familyname", "surname"),
+         _last_name(identity.get("full_name"))),
         (("full name", "name", "nom complet"), identity.get("full_name")),
         (("email", "courriel", "e mail"), identity.get("email")),
-        (("phone", "telephone", "mobile"), identity.get("phone")),
-        (("city", "ville", "location", "localisation"), identity.get("city")),
+        # Indicatif déjà choisi dans une liste à part (Thales, Workday) : le numéro national seul.
+        (("phone", "telephone", "mobile"),
+         (national_phone(identity.get("phone")) or compact_phone(identity.get("phone"))) if has_phone_code_field(fields)
+         else compact_phone(identity.get("phone"))),
+        (("postal code", "code postal", "zip", "postcode", "post code"), identity.get("postal_code")),
+        (REGION_TERMS, identity.get("region")),
+        # Ville de résidence (adresse postale) d'abord ; la ville du CV sinon.
+        (("city", "ville", "location", "localisation"), identity.get("residence_city") or identity.get("city")),
     ]
+    name_rules = [terms for terms, _ in known[3:6]]  # prénom, nom, nom complet
     standard = candidate.get("standard_answers") if isinstance(candidate.get("standard_answers"), dict) else {}
     exact_answers = {
         _fold(item.get("question")): item
         for item in standard.values()
         if isinstance(item, dict) and _fold(item.get("question")) and str(item.get("answer") or "").strip()
     }
-    values, interventions = [], []
+    # Liste de cases « Comment nous avez-vous connus ? » : une seule case cochée, la plus sûre.
+    groups: dict[str, list[Field]] = {}
+    for field in fields:
+        if field.kind == "checkbox" and field.group and is_source_question(field.group):
+            groups.setdefault(field.group, []).append(field)
+    chosen_sources = {}
+    for members in groups.values():
+        answer = source_answer([member.label for member in members])
+        if answer is not None:
+            chosen_sources |= {member.selector: member.label == answer for member in members}
+    values, interventions, answered = [], [], set()
     for field in fields:
         folded = _fold(f"{field.name} {field.label}")
         value, confidence, source = None, 0.0, None
+        if any(term in folded for term in MIDDLE_NAME_TERMS):
+            continue  # « Deuxième prénom » : ni le prénom, ni le nom complet
+        if field.selector in chosen_sources:
+            if chosen_sources[field.selector]:
+                values.append({"selector": field.selector, "value": True, "kind": "checkbox", "confidence": 1.0,
+                               "source": "regle:source_candidature", "label": f"{field.group} {field.label}"})
+            continue
+        if field.kind == "checkbox" and field.required and not field.sensitive and is_application_consent(field.label):
+            values.append({"selector": field.selector, "value": True, "kind": "checkbox", "confidence": 1.0,
+                           "source": "regle:consentement_candidature", "label": field.label})
+            continue
+        if not field.sensitive and is_source_question(field.label):
+            if field.kind in {"select", "radio", "listbox"}:
+                value = source_answer(field.options)
+            elif field.kind in {"text", "textarea"} and not ALREADY_SELECTED.search(folded):
+                value = "LinkedIn"  # une case de recherche Workday déjà renseignée (« 1 item selected ») est gardée
+            if value is not None:
+                values.append({"selector": field.selector, "value": value, "kind": field.kind, "confidence": 1.0,
+                               "source": "regle:source_candidature", "label": field.label})
+                continue
         if field.kind == "file":
             if any(term in folded for term in ("resume", "cv", "curriculum")):
                 value, confidence, source = documents.get("cv"), 1.0, "document:cv"
             elif any(term in folded for term in ("cover letter", "lettre", "motivation")):
                 value, confidence, source = documents.get("lettre"), 1.0, "document:lettre"
-        elif not field.sensitive:
+            elif sum(other.kind == "file" for other in fields) == 1:
+                # Seul dépôt du formulaire, sans libellé utile (« Drop files here », Workday) : le CV.
+                value, confidence, source = documents.get("cv"), 1.0, "document:cv"
+        elif not field.sensitive and field.kind in PROFILE_KINDS:
             for terms, candidate_value in known:
                 if candidate_value and any(term in folded for term in terms):
+                    if terms in name_rules and any(word in folded for word in NOT_CANDIDATE_NAME):
+                        continue  # « Street name », « Company name » : pas le nom du candidat
+                    if terms is REGION_TERMS and not set(terms) & set(folded.split()):
+                        continue  # mot entier : « statement » ne demande pas la région
+                    if terms == known[7][0] and any(word in folded for word in (*PHONE_CODE_TERMS, "extension", "ext ")):
+                        continue  # « Country Phone Code », « Phone Extension » : pas le numéro
+                    if (terms == known[7][0] and field.maxlength and len(str(candidate_value)) > field.maxlength
+                            and national_phone(candidate_value)):
+                        candidate_value = national_phone(candidate_value)  # champ trop court pour « +33 … »
+                    # Une liste n'accepte qu'une de ses options : jamais le numéro dans « indicatif pays ».
+                    if field.kind in {"select", "radio", "listbox"} and str(candidate_value) not in field.options:
+                        break
                     value, confidence, source = str(candidate_value), 1.0, f"profil:{terms[0]}"
                     break
         if value is None:
@@ -481,13 +658,15 @@ def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *
                 answer = str(saved["answer"]).strip()
                 if field.kind == "checkbox" and _fold(answer) in {"oui", "yes", "true", "non", "no", "false"}:
                     value = _fold(answer) in {"oui", "yes", "true"}
-                elif field.kind not in {"select", "radio"} or not field.options or answer in field.options:
+                elif field.kind not in {"select", "radio", "listbox"} or not field.options or answer in field.options:
                     value = answer
                 if value is not None:
                     confidence, source = 1.0, "reponse_type:exacte"
         if value is not None:
             values.append({"selector": field.selector, "value": value, "kind": field.kind,
                            "confidence": confidence, "source": source, "label": field.label})
+        elif field.required and ALREADY_SELECTED.search(folded):
+            answered.add(field.selector)  # widget de recherche qui affiche déjà sa sélection
         elif field.required:
             intervention = {
                 "selector": field.selector, "label": field.label,
@@ -499,9 +678,15 @@ def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *
             if ai_metadata:
                 intervention |= {"maxlength": field.maxlength, "classification": field.classification}
             interventions.append(intervention)
+    # La variante « je n'accepte pas » d'une paire n'attend rien de toi quand son « j'accepte » est coché.
+    if any(item["source"] == "regle:consentement_candidature" for item in values):
+        negative = {field.selector for field in fields if field.kind == "checkbox"
+                    and any(word in _fold(field.label) for word in NEGATION_WORDS)}
+        interventions = [item for item in interventions if item["selector"] not in negative]
+        fields = [field for field in fields if field.selector not in negative]
     return {"values": values, "interventions": interventions,
             "ready": not interventions and all(any(item["selector"] == field.selector for item in values)
-                                                for field in fields if field.required)}
+                                                for field in fields if field.required and field.selector not in answered)}
 
 
 def generic_ai_plan(plan: dict, candidate: dict) -> dict:
@@ -524,7 +709,7 @@ def generic_ai_plan(plan: dict, candidate: dict) -> dict:
         selector, key = proposal.get("selector"), str(proposal.get("answer_key") or "")
         confidence = float(proposal.get("confidence") or 0)
         field = by_selector.get(selector)
-        option_ok = (not field or field.get("input_kind") not in {"select", "radio"}
+        option_ok = (not field or field.get("input_kind") not in {"select", "radio", "listbox"}
                      or not field.get("options") or allowed.get(key) in field["options"])
         if field and key in allowed and confidence >= GENERIC_CONFIDENCE and option_ok:
             accepted[selector] = {"selector": selector, "value": allowed[key],

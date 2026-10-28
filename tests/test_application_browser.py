@@ -1,7 +1,7 @@
 """Garde-fous du moteur navigateur, sans lancer de navigateur réel."""
 import pytest
 
-from jobradar import application_browser, db
+from jobradar import application_adapters, application_browser, db
 
 
 def _attempt(data_dir, provider="unknown") -> dict:
@@ -122,8 +122,111 @@ def test_block_detection_ignores_footer_link_but_detects_login_form() -> None:
         def locator(self, selector):
             return Locator(1 if self.password and "password" in selector else 0)
 
+        def evaluate(self, *_args):
+            return False
+
     page = Page()
     long_page = ("Description complète de l'offre. " * 100) + " Sign in"
     assert application_browser._blocked(page, long_page.casefold()) is False
     page.password = True
     assert application_browser._blocked(page, long_page.casefold()) is True
+
+
+def test_unnamed_fields_and_checkbox_question_are_read_from_the_live_page() -> None:
+    from playwright.sync_api import sync_playwright
+
+    # Flatchr : ni name ni id, question posée par un simple <label> au-dessus des cases.
+    html = """<form data-jobradar-form><input name="email" type="email" placeholder="E-mail">
+    <div><div>Déposez votre CV ou cliquez ici</div><input type="file"></div>
+    <div><label>Comment vous nous avez connu? *</label>
+      <div><label><input type="checkbox"><p>Offre Linkedin</p></label></div>
+      <div><label><input type="checkbox"><p>Site HGH.com</p></label></div></div>
+    <div><label><input type="checkbox"> J'accepte la politique de confidentialité</label></div>
+    <button type="submit">Envoyer</button></form>"""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        match = application_browser._marked_match(page)
+        fields = {field.label: field for field in match.fields}
+        assert fields["Déposez votre CV ou cliquez ici"].kind == "file"
+        assert fields["Site HGH.com"].group == "Comment vous nous avez connu? *"
+        assert fields["J'accepte la politique de confidentialité"].group == ""
+        plan = application_adapters.fill_plan(match.fields, {"identity": {}}, {})
+        # Le site reconstruit son formulaire (React) : les repères disparaissent puis sont reposés à l'identique.
+        page.evaluate("document.querySelectorAll('[data-jobradar-field]').forEach(el => "
+                      "el.removeAttribute('data-jobradar-field'))")
+        application_browser._fill(page.locator(match.selector).first, plan)
+        assert page.locator("input[type=checkbox]").evaluate_all("els => els.map(el => el.checked)") == [
+            False, True, False]
+        browser.close()
+
+
+def test_validation_errors_are_read_inside_the_application_form_only() -> None:
+    from playwright.sync_api import sync_playwright
+
+    html = """<header role="alert">Stage Ingénieur - cybersécurité applicative (H/F)</header>
+    <form data-jobradar-form><input name="email" aria-invalid="false"><p role="alert"></p>
+    <span role="alert">Paul_FOKO_CV.pdf successfully uploaded</span></form>"""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        assert application_browser._validation_errors(page) == []
+        page.evaluate("document.querySelector('form p').textContent = 'E-mail invalide'")
+        assert application_browser._validation_errors(page) == ["E-mail invalide"]
+        browser.close()
+
+
+def test_custom_listbox_is_read_filled_and_verified() -> None:
+    from playwright.sync_api import sync_playwright
+
+    # Workday : un bouton « Select One » ouvre une liste d'options rendue hors du formulaire.
+    html = """<form data-jobradar-form><div data-automation-id="formField-age">
+      <label>Are you over 18 years of age?*</label>
+      <button type="button" aria-haspopup="listbox" id="age">Select One</button></div>
+      <input name="email" type="email"></form>
+    <ul role="listbox" id="list" hidden><li role="option">Yes</li><li role="option">No</li></ul>
+    <script>
+      age.onclick = () => list.hidden = false;
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') list.hidden = true; });
+      list.querySelectorAll('li').forEach(li => li.onclick = () => { age.textContent = li.textContent; list.hidden = true; });
+    </script>"""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        match = application_browser._marked_match(page)
+        field = next(field for field in match.fields if field.kind == "listbox")
+        assert field.label == "Are you over 18 years of age?*" and field.options == ("Yes", "No") and field.required
+        assert page.locator("#list").is_hidden()  # refermée après lecture
+        plan = {"values": [{"selector": field.selector, "value": "Yes", "kind": "listbox", "label": field.label}]}
+        form = page.locator(match.selector).first
+        application_browser._fill(form, plan)
+        assert page.locator("#age").inner_text() == "Yes"
+        assert application_browser._verify_filled(form, plan) == []
+        browser.close()
+
+
+def test_frozen_tab_is_reloaded_before_connecting(tmp_path) -> None:
+    import socket
+
+    from playwright.sync_api import sync_playwright
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    frozen = tmp_path / "fige.html"
+    frozen.write_text("<p>Page figée</p><script>setTimeout(() => { while (true) {} }, 300);</script>")
+    healthy = tmp_path / "ok.html"
+    healthy.write_text("<p>Page normale</p>")
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(args=[f"--remote-debugging-port={port}"])
+        page = browser.new_page()
+        page.goto(healthy.as_uri())
+        stuck = browser.new_page()
+        stuck.goto(frozen.as_uri())
+        stuck.wait_for_timeout(800)  # la boucle infinie a démarré
+        reloaded = application_browser._unfreeze_tabs(port)
+        assert reloaded == [frozen.as_uri()]
+        browser.close()
