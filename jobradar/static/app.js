@@ -502,6 +502,19 @@ function autoApplyActive(recent) {
   return recent.some(job => autoApplyGroup(job) === "running");
 }
 
+function normalizedAutoApplyText(value) {
+  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("fr");
+}
+
+function matchesAutoApplyQuery(job, query) {
+  if (!query) return true;
+  // Seul le texte affiché compte : les codes internes (« queued », « done »…) donneraient de faux résultats.
+  return normalizedAutoApplyText([
+    job.title, job.company, job.search_name, autoApplyStepLabel(job), autoApplyResult(job),
+    job.attempt?.provider, job.supervision?.understanding,
+  ].join(" ")).includes(query);
+}
+
 // Bandeau compact sur la page d'une recherche : le détail vit sur la page « Candidatures auto ».
 function renderAutoApply(info) {
   const { settings, today, recent = [] } = info;
@@ -575,9 +588,14 @@ function renderAutoApplyPage(info) {
 
 function renderAutoApplyList() {
   const filter = chipValues($("#aaFilter"))[0] || "all";
-  const recent = (state.autoApplyInfo?.recent || []).filter(job => filter === "all" || autoApplyGroup(job) === filter);
+  const query = normalizedAutoApplyText($("#aaQuery").value.trim());
+  const recent = (state.autoApplyInfo?.recent || []).filter(job =>
+    (filter === "all" || autoApplyGroup(job) === filter) && matchesAutoApplyQuery(job, query));
   $("#aaRecent").innerHTML = recent.map(autoApplyItem).join("");
   $("#aaEmpty").hidden = recent.length > 0;
+  $("#aaEmpty").textContent = query
+    ? "Aucune candidature ne correspond à cette recherche."
+    : "Aucune candidature automatique pour ce filtre.";
   $$("[data-aa-app]", $("#aaRecent")).forEach(button => (button.onclick = async () => {
     await openTracker();
     openAppModal(Number(button.dataset.aaApp));
@@ -2800,6 +2818,7 @@ $("#autoApplyNav").onclick = openAutoApply;
 $("#aaManage").onclick = openAutoApply;
 $("#aaRefresh").onclick = loadAutoApplyPage;
 $("#aaFilter").addEventListener("change", renderAutoApplyList);
+$("#aaQuery").addEventListener("input", renderAutoApplyList);
 $("#aaRetryAll").onclick = async event => {
   try { await retryAllAutoApply(event.currentTarget); } catch (e) { toast(e.message, 6000); }
 };

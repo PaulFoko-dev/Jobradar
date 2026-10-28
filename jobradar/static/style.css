@@ -843,6 +843,8 @@ table.apps .k-flags { margin-top: 4px; }
 .aa-search-list .switch-row { background: transparent; border: 0; padding: 0; }
 .aa-list-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .aa-list-head h2 { margin: 0; }
+.aa-list-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; flex: 1 1 520px; }
+#aaQuery { width: min(100%, 360px); }
 #aaStatus { margin: 0 0 16px; }
 .auto-apply-recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }
 .auto-apply-recent li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;

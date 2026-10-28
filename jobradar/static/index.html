@@ -234,9 +234,14 @@
       </div>
       <div class="aa-list-head">
         <h2>Suivi des envois</h2>
-        <div class="segmented" id="aaFilter">
-          <button data-v="all" class="on">Toutes</button><button data-v="todo">À finir</button>
-          <button data-v="running">En cours</button><button data-v="sent">Envoyées</button>
+        <div class="aa-list-tools">
+          <input id="aaQuery" type="search" autocomplete="off"
+                 aria-label="Rechercher une candidature automatique"
+                 placeholder="Rechercher un poste, une entreprise, un statut…">
+          <div class="segmented" id="aaFilter">
+            <button data-v="all" class="on">Toutes</button><button data-v="todo">À finir</button>
+            <button data-v="running">En cours</button><button data-v="sent">Envoyées</button>
+          </div>
         </div>
       </div>
       <ul id="aaRecent" class="auto-apply-recent"></ul>
