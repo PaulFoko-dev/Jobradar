@@ -183,9 +183,11 @@ def profile_values(candidate: dict) -> dict[str, str]:
         "full_name": identity.get("full_name"),
         "email": identity.get("email"),
         "phone": compact_phone(identity.get("phone")),
+        "address": identity.get("address_line1"),
         "city": identity.get("residence_city") or identity.get("city"),
         "postal_code": identity.get("postal_code"),
         "region": identity.get("region"),
+        "country": identity.get("country"),
     }
     for link in identity.get("links") or []:
         url = link.get("url") if isinstance(link, dict) else link
@@ -336,9 +338,10 @@ def enrich_candidate(candidate: dict, facts: dict[str, str]) -> dict:
     if not identity.get("full_name"):
         identity["full_name"] = facts.get("full_name") or " ".join(
             part for part in (facts.get("first_name"), facts.get("last_name")) if part) or None
-    for key in ("email", "phone", "city"):
-        if not identity.get(key) and facts.get(key):
-            identity[key] = facts[key]
+    for key, fact in (("email", "email"), ("phone", "phone"), ("city", "city"), ("postal_code", "postal_code"),
+                      ("country", "country"), ("address_line1", "address")):
+        if not identity.get(key) and facts.get(fact):
+            identity[key] = facts[fact]
     links = list(identity.get("links") or [])
     present = " ".join(str(link.get("url") if isinstance(link, dict) else link) for link in links).casefold()
     for key in ("linkedin", "github"):

@@ -37,6 +37,14 @@ def test_profile_import_is_bounded_and_responsive() -> None:
     assert "@media (max-width: 640px)" in style
 
 
+def test_profile_exposes_reusable_application_fields() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    for field in ("address_line1", "postal_code", "region", "country", "availability", "notice_period",
+                  "work_authorization", "sponsorship", "desired_salary"):
+        assert field in source
+    assert "standard_answers = { ...(current.standard_answers || {}) }" in source
+
+
 def test_interface_is_revalidated_after_an_update(client) -> None:
     page = client.get("/")
     script = client.get("/static/profile-ui.js")

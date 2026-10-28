@@ -43,8 +43,10 @@ ITEM_PREFIXES = {
 }
 IDENTITY_MARKERS = {
     "full_name": "{{NOM}}", "email": "{{EMAIL}}", "phone": "{{TELEPHONE}}",
-    "city": "{{VILLE}}", "links": "{{LIENS}}",
+    "address_line1": "{{ADRESSE}}", "postal_code": "{{CODE_POSTAL}}", "city": "{{VILLE}}",
+    "region": "{{REGION}}", "country": "{{PAYS}}", "links": "{{LIENS}}",
 }
+IDENTITY_TEXT_FIELDS = ("full_name", "email", "phone", "address_line1", "postal_code", "city", "region", "country")
 # Toute modification du profil (lecture, changement, écriture) se fait sous ce verrou.
 LOCK = threading.RLock()
 
@@ -97,7 +99,7 @@ def empty_profile() -> dict:
         "schema": 1,
         "version": 0,
         "updated_at": _now(),
-        "identity": {"full_name": "", "email": "", "phone": "", "city": "", "links": []},
+        "identity": {field: "" for field in IDENTITY_TEXT_FIELDS} | {"links": []},
         "headline": "",
         "summary": "",
         "experiences": [],
@@ -154,7 +156,7 @@ def _normalise_profile(data: dict) -> dict:
     if not isinstance(identity, dict):
         raise ProfileError("L'identité du profil doit être un objet.")
     result["identity"] = empty_profile()["identity"] | identity
-    if any(not isinstance(result["identity"].get(key), str) for key in ("full_name", "email", "phone", "city")):
+    if any(not isinstance(result["identity"].get(key), str) for key in IDENTITY_TEXT_FIELDS):
         raise ProfileError("Les champs d'identité doivent être des textes.")
     links = result["identity"].get("links")
     if not isinstance(links, list) or any(not isinstance(link, dict) for link in links):
@@ -470,7 +472,7 @@ def mask_identity(text: str, identity: dict | None = None) -> str:
     identity = identity or {}
     masked = text
     known = [(str(identity.get(field) or "").strip(), IDENTITY_MARKERS[field])
-             for field in ("full_name", "email", "phone", "city")]
+             for field in IDENTITY_TEXT_FIELDS]
     known += [(str(link.get("url") or "").strip(), IDENTITY_MARKERS["links"])
               for link in identity.get("links") or [] if isinstance(link, dict)]
     for value, marker in sorted(known, key=lambda pair: len(pair[0]), reverse=True):

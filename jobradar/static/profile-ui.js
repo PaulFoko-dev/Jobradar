@@ -14,6 +14,14 @@
   };
   const LINK_FIELDS = [["LinkedIn", "https://www.linkedin.com/in/ton-profil"], ["GitHub", "https://github.com/ton-compte"],
     ["Portfolio", "https://ton-site.fr"]];
+  const IDENTITY_FIELDS = ["full_name", "email", "phone", "address_line1", "postal_code", "city", "region", "country"];
+  const APPLICATION_FIELDS = [
+    ["availability", "Date de disponibilité", "ex. 1er février 2027"],
+    ["notice_period", "Délai de préavis", "ex. Aucun ou 1 mois"],
+    ["work_authorization", "Autorisation de travail dans le pays du poste", "oui_non"],
+    ["sponsorship", "Besoin d’un visa ou d’un parrainage employeur", "oui_non"],
+    ["desired_salary", "Rémunération souhaitée", "ex. 1 400 € brut/mois"],
+  ];
   let current = null;
   let versions = [];
   let busy = false;
@@ -32,6 +40,18 @@
     const url = value.trim();
     if (!url) return "";
     return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  }
+
+  function standardAnswer(key) {
+    return String(current.standard_answers?.[key]?.answer || "");
+  }
+
+  function applicationField([key, label, hint]) {
+    const value = standardAnswer(key);
+    if (hint === "oui_non") return `<label class="field"><span>${label}</span><select name="standard-${key}">
+      <option value="">Non renseigné</option><option value="Oui" ${value === "Oui" ? "selected" : ""}>Oui</option>
+      <option value="Non" ${value === "Non" ? "selected" : ""}>Non</option></select></label>`;
+    return `<label class="field"><span>${label}</span><input name="standard-${key}" value="${esc(value)}" placeholder="${hint}"></label>`;
   }
 
   function values(item) {
@@ -112,10 +132,16 @@
             <label class="field"><span>Nom complet</span><input name="full_name" value="${esc(identity.full_name)}"></label>
             <label class="field"><span>E-mail</span><input name="email" type="email" value="${esc(identity.email)}"></label>
             <label class="field"><span>Téléphone</span><input name="phone" value="${esc(identity.phone)}"></label>
+            <label class="field"><span>Adresse</span><input name="address_line1" autocomplete="street-address" value="${esc(identity.address_line1)}"></label>
+            <label class="field"><span>Code postal</span><input name="postal_code" autocomplete="postal-code" value="${esc(identity.postal_code)}"></label>
             <label class="field"><span>Ville</span><input name="city" value="${esc(identity.city)}"></label>
+            <label class="field"><span>Région / département</span><input name="region" value="${esc(identity.region)}"></label>
+            <label class="field"><span>Pays de résidence</span><input name="country" autocomplete="country-name" value="${esc(identity.country)}"></label>
             ${LINK_FIELDS.map(([label, placeholder]) => `<label class="field"><span>${label}</span><input name="link-${label}" type="url" inputmode="url" placeholder="${placeholder}" value="${esc(linkOf(identity, label))}"></label>`).join("")}
           </div><label class="field"><span>Titre professionnel</span><input name="headline" value="${esc(current.headline)}"></label>
-          <label class="field"><span>Résumé</span><textarea name="summary" rows="5">${esc(current.summary)}</textarea></label></form>
+          <label class="field"><span>Résumé</span><textarea name="summary" rows="5">${esc(current.summary)}</textarea></label>
+          <h3>Informations souvent demandées</h3><p class="muted small">Elles servent de réponses types. Laisse vide toute réponse qui dépend de l’offre.</p>
+          <div class="row-2">${APPLICATION_FIELDS.map(applicationField).join("")}</div></form>
         </section>
         ${Object.entries(SECTION_LABELS).map(([key, label]) => `<section class="panel"><h2>${label}</h2>${sectionCards(key)}</section>`).join("")}
       </div><aside class="profile-side">
@@ -175,7 +201,7 @@
     };
     document.querySelector("#profileSave").onclick = event => runOnce(event.currentTarget, async () => {
       const form = document.querySelector("#profileIdentity");
-      const identity = Object.fromEntries(["full_name", "email", "phone", "city"].map(key => [key, form.elements[key].value.trim()]));
+      const identity = Object.fromEntries(IDENTITY_FIELDS.map(key => [key, form.elements[key].value.trim()]));
       // Seul le lien affiché dans chaque champ est remplacé ; les autres liens importés sont conservés.
       const links = current.identity.links || [];
       const shown = new Set(LINK_FIELDS.map(([label]) => links.find(link => linkLabel(link) === label)).filter(Boolean));
@@ -184,7 +210,14 @@
         ...LINK_FIELDS.map(([label]) => [label, normaliseUrl(form.elements[`link-${label}`].value)])
           .filter(([, url]) => url).map(([label, url]) => ({ label, url })),
       ];
-      current = await api("/api/profile", { method: "PUT", body: { identity, headline: form.elements.headline.value.trim(), summary: form.elements.summary.value.trim() } });
+      const standard_answers = { ...(current.standard_answers || {}) };
+      APPLICATION_FIELDS.forEach(([key, question]) => {
+        const answer = form.elements[`standard-${key}`].value.trim();
+        if (answer) standard_answers[key] = { question, answer, sensitive: false };
+        else delete standard_answers[key];
+      });
+      current = await api("/api/profile", { method: "PUT", body: { identity, standard_answers,
+        headline: form.elements.headline.value.trim(), summary: form.elements.summary.value.trim() } });
       versions = await api("/api/profile/versions");
       toast("Profil enregistré"); render();
     });

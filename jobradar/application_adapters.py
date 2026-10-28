@@ -484,6 +484,11 @@ NOT_CANDIDATE_NAME = ("street", "rue", "voie", "company", "entreprise", "societe
                       "employeur", "contact", "university", "universite", "account", "compte")
 ALREADY_SELECTED = re.compile(r"\b[1-9]\d* items? selected\b")
 REGION_TERMS = ("state", "region", "departement", "department", "county", "province")
+ADDRESS_TERMS = ("street address", "address line 1", "adresse ligne 1", "adresse postale", "adresse")
+COUNTRY_TERMS = ("country", "pays", "country of residence", "pays de residence")
+# « Adresse ligne 2 », « Complément d'adresse » : jamais une copie de la première ligne.
+ADDRESS_LINE2_TERMS = ("line 2", "ligne 2", "address 2", "adresse 2", "complement", "suite", "apartment",
+                       "appartement", "batiment")
 PROFILE_KINDS = {"text", "email", "tel", "url", "textarea", "number", "select", "radio", "listbox"}
 
 
@@ -583,6 +588,8 @@ def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *
          else compact_phone(identity.get("phone"))),
         (("postal code", "code postal", "zip", "postcode", "post code"), identity.get("postal_code")),
         (REGION_TERMS, identity.get("region")),
+        (ADDRESS_TERMS, identity.get("address_line1")),
+        (COUNTRY_TERMS, identity.get("country")),
         # Ville de résidence (adresse postale) d'abord ; la ville du CV sinon.
         (("city", "ville", "location", "localisation"), identity.get("residence_city") or identity.get("city")),
     ]
@@ -642,6 +649,10 @@ def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *
                         continue  # « Street name », « Company name » : pas le nom du candidat
                     if terms is REGION_TERMS and not set(terms) & set(folded.split()):
                         continue  # mot entier : « statement » ne demande pas la région
+                    if terms is ADDRESS_TERMS and any(word in folded for word in ADDRESS_LINE2_TERMS):
+                        continue
+                    if terms is COUNTRY_TERMS and any(word in folded for word in PHONE_CODE_TERMS):
+                        continue  # « Country code » attend un indicatif, pas « France »
                     if terms == known[7][0] and any(word in folded for word in (*PHONE_CODE_TERMS, "extension", "ext ")):
                         continue  # « Country Phone Code », « Phone Extension » : pas le numéro
                     if (terms == known[7][0] and field.maxlength and len(str(candidate_value)) > field.maxlength

@@ -44,6 +44,30 @@ def test_lever_plan_is_ready_when_all_required_fields_are_known() -> None:
     assert plan["ready"] is True and plan["interventions"] == []
 
 
+def test_postal_address_fields_are_filled_from_the_local_profile() -> None:
+    fields = [
+        Field(name="address", label="Street address", kind="text", required=True, selector="#address"),
+        Field(name="postal", label="Code postal", kind="text", required=True, selector="#postal"),
+        Field(name="region", label="Région", kind="text", required=True, selector="#region"),
+        Field(name="country", label="Pays", kind="select", required=True, selector="#country",
+              options=("France", "Belgique")),
+    ]
+    candidate = {"identity": {"address_line1": "12 rue des Lilas", "postal_code": "75011",
+                              "region": "Île-de-France", "country": "France"}}
+    plan = fill_plan(fields, candidate, {})
+    assert {item["value"] for item in plan["values"]} == {
+        "12 rue des Lilas", "75011", "Île-de-France", "France",
+    }
+    assert plan["ready"] is True
+
+
+@pytest.mark.parametrize("label", ["Adresse ligne 2", "Address line 2", "Complément d'adresse", "Country code"])
+def test_secondary_address_and_country_code_fields_are_not_filled_with_the_address(label) -> None:
+    fields = [Field(name="field", label=label, kind="text", required=False, selector="#field")]
+    candidate = {"identity": {"address_line1": "12 rue des Lilas", "country": "France"}}
+    assert fill_plan(fields, candidate, {})["values"] == []
+
+
 def test_sensitive_required_question_always_requires_user_decision() -> None:
     fields = adapter_for("smartrecruiters").parse(
         (FIXTURES / "smartrecruiters.html").read_text(encoding="utf-8")

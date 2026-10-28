@@ -75,7 +75,8 @@ def test_import_text_extracts_identity_locally_and_never_sends_it_to_ai(prompts)
 
     assert result["profile"]["identity"] == {
         "full_name": "Alice Martin", "email": "alice.martin@example.test", "phone": "06 12 34 56 78",
-        "city": "Paris", "links": [{"label": "GitHub", "url": "https://github.com/alice"}],
+        "address_line1": "", "postal_code": "", "city": "Paris", "region": "", "country": "",
+        "links": [{"label": "GitHub", "url": "https://github.com/alice"}],
     }
     prompt = prompts[0]["prompt"]
     assert prompts[0]["task"] == "profile"

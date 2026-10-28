@@ -50,6 +50,14 @@ def test_profile_values_expose_only_non_sensitive_facts() -> None:
     assert "Non" not in values.values()  # la réponse type sensible n'est jamais proposée à l'IA
 
 
+def test_profile_values_expose_postal_address_and_country() -> None:
+    candidate = CANDIDATE | {"identity": CANDIDATE["identity"] | {"address_line1": "12 rue des Lilas",
+                                                                  "country": "France"}}
+    values = application_supervisor.profile_values(candidate)
+
+    assert values["address"] == "12 rue des Lilas" and values["country"] == "France"
+
+
 def test_validate_keeps_only_actions_of_the_closed_set_on_existing_elements() -> None:
     snap = _snap({"text": "Je suis intéressé(e)"},
                  {"tag": "input", "type": "email", "label": "E-mail"},
