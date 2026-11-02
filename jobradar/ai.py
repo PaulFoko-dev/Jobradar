@@ -296,6 +296,8 @@ Pour chaque offre (identifiée par "id"), fournis :
   ne dépasse pas 25. Une offre d'un autre type de contrat que ceux demandés (ex. CDI alors qu'il cherche
   un stage) ne dépasse pas 30. Une offre hors zone géographique mais excellente sur le reste peut garder
   un score élevé (70-85).
+  N'intègre pas la récence de publication dans ce score : JobRadar applique ensuite lui-même un bonus ou un
+  malus temporel déterministe, afin d'éviter de compter deux fois ce critère.
 - verdict : jugement en quelques mots.
 - match_reasons / mismatch_reasons : points concrets qui collent / ne collent pas (2 à 4 chacun).
 - summary : 2 à 3 phrases résumant le poste et l'entreprise.

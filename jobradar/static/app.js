@@ -752,6 +752,28 @@ function contractBadge(o) {
   return c && c !== "Non précisé" ? `<span class="badge contract">${esc(c)}</span>` : "";
 }
 
+function autoQueueButton(o) {
+  if (o.auto_apply_at_utc) return `<button class="icon-btn on" type="button" disabled title="Déjà dans la file automatique" aria-label="Dans la file automatique">🤖</button>`;
+  if (o.app_id) return "";
+  const blocked = o.status === "ignored" || o.deadline?.state === "expiree" || o.in_zone === false
+    || o.company_rule === "excluded" || o.already_applied || o.nationality_required;
+  return `<button class="icon-btn" type="button" data-auto-queue="${o.id}" ${blocked ? "disabled" : ""}
+    title="${blocked ? "Cette offre n’est pas éligible à l’auto-candidature" : "Ajouter à la file de candidature automatique"}"
+    aria-label="Ajouter à la file de candidature automatique">🤖<small>+</small></button>`;
+}
+
+async function queueOfferForAutoApply(o, button) {
+  if (!confirm(`Ajouter cette offre à la file automatique ?\n\n${o.title}\n${o.company || ""}\n\nLe robot préparera les documents puis candidatera sans relecture, dans la limite du plafond quotidien.`)) return;
+  try {
+    const result = await busy(button, "…", () => api(`/api/offers/${o.id}/auto-apply`, { method: "POST" }));
+    o.auto_apply_at_utc = new Date().toISOString();
+    o.app_id = result.application_id;
+    renderOffers();
+    if (!$("#modal").hidden) openModal(o.id);
+    toast("Offre ajoutée à la file automatique");
+  } catch (error) { toast(error.message, 6000); }
+}
+
 function renderOffers() {
   const list = filteredOffers();
   const all = state.offers;
@@ -805,6 +827,7 @@ function renderOffers() {
       <p class="summary">${esc(a.summary || (o.description || "").slice(0, 220))}</p>
       <div class="card-foot">
         <span>${o.viewed ? "" : `<b style="color:var(--accent)">● Nouveau</b> · `}${esc(sources.join(" · "))} · ${esc(fmtDate(o.date_posted || o.first_seen))}</span>
+        ${autoQueueButton(o)}
         <button class="icon-btn ${o.status === "fav" ? "on" : ""}" data-fav="${o.id}" title="Favori" aria-label="${o.status === "fav" ? "Retirer des favoris" : "Ajouter aux favoris"}" aria-pressed="${o.status === "fav"}">${o.status === "fav" ? "★" : "☆"}</button>
       </div>
     </article>`;
@@ -823,6 +846,8 @@ function renderOffers() {
     card.onclick = e => {
       const fav = e.target.closest("[data-fav]");
       if (fav) { e.stopPropagation(); toggleStatus(+fav.dataset.fav, "fav"); return; }
+      const queue = e.target.closest("[data-auto-queue]");
+      if (queue) { e.stopPropagation(); queueOfferForAutoApply(state.offers.find(o => o.id === +queue.dataset.autoQueue), queue); return; }
       openModal(+card.dataset.id);
     };
     card.onkeydown = e => { if (e.key === "Enter" && e.target === card) openModal(+card.dataset.id); };
@@ -972,6 +997,8 @@ function openModal(id) {
           : `<span class="track-pill">Pas encore dans le suivi</span>`}
       </div>
       <div class="offer-actions">
+        ${o.auto_apply_at_utc ? `<span class="track-pill">🤖 Dans la file automatique</span>`
+          : !o.app_id ? `<button class="btn" id="autoQueueStart" type="button">🤖 Ajouter à la file auto</button>` : ""}
         <button class="btn" id="prepareDocsStart" type="button">Préparer CV et lettre</button>
         <button class="btn primary lg" id="applyStart" type="button">Candidater</button>
       </div>
@@ -987,6 +1014,8 @@ function openModal(id) {
     await openTracker();
     openAppModal(o.already_applied.application_id);
   };
+  const autoQueueStart = $("#autoQueueStart");
+  if (autoQueueStart) autoQueueStart.onclick = () => queueOfferForAutoApply(o, autoQueueStart);
   $("#prepareDocsStart").onclick = async event => {
     const button = event.currentTarget;
     try {
@@ -2262,20 +2291,26 @@ async function dismissNotif(id) {
   await loadNotifs();
 }
 
-// Clic sur une notification : on la marque comme lue puis on ouvre l'offre ou la candidature concernée.
+// Clic sur une notification : on ouvre l'offre, la candidature ou directement l'action demandée.
+// Une demande d'intervention reste non lue tant qu'elle n'est pas réglée (le serveur la retire alors).
 async function openNotif(n) {
   if (!n) return;
   const p = n.payload || {};
-  if (isUnread(n)) api(`/api/notifications/${n.id}/dismiss`, { method: "POST" }).then(loadNotifs, e => toast(e.message, 5000));
+  const dismiss = () => {
+    if (isUnread(n)) api(`/api/notifications/${n.id}/dismiss`, { method: "POST" }).then(loadNotifs, e => toast(e.message, 5000));
+  };
+  if (n.kind !== "application_intervention") dismiss();
   closeNotifs();
   if (n.kind === "high_score_offer") {
     if (state.currentId !== p.search_id || $("#viewResults").hidden) await openResults(p.search_id);
     if (state.offers.some(o => o.id === p.offer_id)) openModal(p.offer_id);
     else toast("Cette offre n'existe plus.");
-  } else if (n.kind === "application_intervention" || n.kind === "application_submitted") {
+  } else if (["application_intervention", "auto_apply_failed", "auto_apply_manual"].includes(n.kind)) {
     await openTracker();
-    if (state.apps.some(a => a.id === p.application_id)) await window.JobRadarApply.open(p.application_id);
-    else toast("Cette candidature n'est plus suivie.");
+    if (!state.apps.some(a => a.id === p.application_id)) { toast("Cette candidature n'est plus suivie."); dismiss(); return; }
+    const focus = n.kind === "application_intervention"
+      ? { attemptId: p.attempt_id, kind: p.intervention_kind, message: p.message, settled: dismiss } : null;
+    try { await window.JobRadarApply.open(p.application_id, focus); } catch (e) { toast(e.message, 6000); }
   } else {
     await openTracker();
     if (state.apps.some(a => a.id === p.application_id)) openAppModal(p.application_id);

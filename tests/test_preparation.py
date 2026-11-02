@@ -181,6 +181,36 @@ def test_eligibilite_exclut_une_exigence_de_nationalite(search_id, make_offer):
     assert [offer["id"] for offer in preparation.eligible_offers(db.get_search(search_id))] == [allowed]
 
 
+def test_offres_automatiques_priorisees_par_recence_puis_score(search_id, make_offer):
+    old = make_offer(published_at="2026-10-01T08:00:00Z")
+    recent_low = make_offer(published_at="2026-10-20T08:00:00Z")
+    recent_high = make_offer(published_at="2026-10-20T08:00:00Z")
+    _score(old, 99)
+    _score(recent_low, 90)
+    _score(recent_high, 95)
+    _enable(search_id, min_score=80)
+
+    assert [offer["id"] for offer in preparation.eligible_offers(db.get_search(search_id))] == [
+        recent_high, recent_low, old,
+    ]
+
+
+def test_choix_manuel_ajoute_une_offre_sous_le_seuil(client, search_id, make_offer, quiet_queue):
+    offer_id = make_offer()
+    _score(offer_id, 42)
+    _enable(search_id, min_score=80, daily_limit=5)
+
+    response = client.post(f"/api/offers/{offer_id}/auto-apply")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["queued"] is True and body["application_id"]
+    offer = db.get_offer(offer_id)
+    assert offer["auto_apply_at_utc"] is not None and offer["app_id"] == body["application_id"]
+    job = db.get_preparation_job(body["job_id"])
+    assert job["params"]["selected_by_user"] is True
+    assert client.post(f"/api/offers/{offer_id}/auto-apply").status_code == 409
+
+
 def test_plafond_quotidien_dans_le_fuseau_de_l_utilisateur(search_id, make_offer, quiet_queue, chain, clock):
     offers = [make_offer() for _ in range(4)]
     for index, offer_id in enumerate(offers):

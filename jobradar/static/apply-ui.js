@@ -54,6 +54,32 @@
         ? `<button class="btn sm primary" type="button" data-manual-attempt="${attempt.id}">Passer en manuel</button>` : ""}`;
   }
 
+  function attemptHtml(attempt) {
+    return `<article><div><b>${esc(attemptLabels[attempt.status] || attempt.status)}</b><small>${esc(attempt.mode === "manual" ? "Manuel" : `Assisté · ${attempt.provider}`)}</small>
+      ${attempt.intervention?.message ? `<p>${esc(attempt.intervention.message)}</p>` : ""}${attempt.error ? `<p>${esc(attempt.error)}</p>` : ""}
+      ${previewHtml(attempt.intervention)}${interventionForm(attempt)}</div>
+      <div>${attemptActions(attempt)}
+      ${attempt.intervention?.kind === "review_required" ? `<button class="btn sm primary" type="button" data-approve-attempt="${attempt.id}">Autoriser l'envoi</button>` : ""}</div></article>`;
+  }
+
+  // Ouverture depuis une notification : seulement la session concernée et l'action qu'elle attend.
+  function focusHtml(data, attempt, focus) {
+    const waiting = attempt.status === "running" && focus.kind === "waiting_user";
+    const actionable = ["needs_user", "failed"].includes(attempt.status);
+    const body = waiting
+      ? `<div class="e-note warn" role="status"><span><b>Étape à faire dans la fenêtre du navigateur JobRadar</b>
+          <small>${esc(focus.message || "Termine l'étape affichée dans le navigateur.")}</small></span></div>`
+      : actionable
+        ? `${!attempt.intervention?.message && focus.message ? `<p>${esc(focus.message)}</p>` : ""}
+          <section class="apply-attempts">${attemptHtml(attempt)}</section>`
+        : `<p class="e-note" role="status">Cette demande est déjà réglée : ${esc((attemptLabels[attempt.status] || attempt.status).toLowerCase())}.</p>`;
+    return `<div class="m-pad apply-dialog"><h2 id="dialogTitle">Action demandée — ${esc(data.application.company || "candidature")}</h2>
+      <p class="muted">${esc(data.application.title)}</p>
+      <div class="apply-error" data-apply-error role="alert" aria-live="assertive"></div>${body}</div>
+      <div class="m-foot"><button class="btn ghost" data-apply-cancel>Fermer</button>
+        <button class="btn" type="button" data-apply-all>Toutes les options de candidature</button></div>`;
+  }
+
   function selectionHtml(data) {
     const noCv = !data.documents.some(document => document.kind === "cv");
     const assisted = data.assisted;
@@ -65,12 +91,7 @@
         `<button class="btn ghost apply-adjust-docs" type="button" data-prepare-documents>Ajuster ou générer d'autres documents</button>`}
       ${(data.stale_documents || []).map(item => `<div class="e-note warn apply-stale" role="status"><span><b>${esc(documentLabel(item))} non proposé : document périmé.</b>
         <small>${esc(item.message)}</small></span></div>`).join("")}
-      ${(data.attempts || []).length ? `<section class="apply-attempts"><h3>Sessions récentes</h3>${data.attempts.slice(0, 5).map(attempt =>
-        `<article><div><b>${esc(attemptLabels[attempt.status] || attempt.status)}</b><small>${esc(attempt.mode === "manual" ? "Manuel" : `Assisté · ${attempt.provider}`)}</small>
-          ${attempt.intervention?.message ? `<p>${esc(attempt.intervention.message)}</p>` : ""}${attempt.error ? `<p>${esc(attempt.error)}</p>` : ""}
-          ${previewHtml(attempt.intervention)}${interventionForm(attempt)}</div>
-          <div>${attemptActions(attempt)}
-          ${attempt.intervention?.kind === "review_required" ? `<button class="btn sm primary" type="button" data-approve-attempt="${attempt.id}">Autoriser l'envoi</button>` : ""}</div></article>`).join("")}</section>` : ""}
+      ${(data.attempts || []).length ? `<section class="apply-attempts"><h3>Sessions récentes</h3>${data.attempts.slice(0, 5).map(attemptHtml).join("")}</section>` : ""}
       <form id="applyForm">
         <label class="field"><span>CV envoyé</span><select name="cv" ${noCv ? "disabled" : "required"}>${choices(data.documents, "cv", data.defaults.cv_document_id)}</select></label>
         <label class="field"><span>Lettre de motivation</span><select name="letter">${choices(data.documents, "lettre", data.defaults.include_letter ? data.defaults.letter_document_id : null, true)}</select></label>
@@ -148,7 +169,7 @@
     bindHelp(help);
   }
 
-  function bindAttempts(applicationId, attempts = []) {
+  function bindAttempts(applicationId, attempts = [], reopen = () => open(applicationId)) {
     document.querySelectorAll("[data-answer-attempt]").forEach(form => form.onsubmit = async event => {
       event.preventDefault();
       if (busy) return;
@@ -168,7 +189,7 @@
       try {
         await api(`/api/application-attempts/${attempt.id}/answers`, { method: "POST", body: { answers } });
         toast("Réponses enregistrées, candidature reprise");
-        await open(applicationId);
+        await reopen();
       } catch (error) {
         document.querySelector("[data-apply-error]").textContent = error.message;
         button.disabled = false;
@@ -181,7 +202,7 @@
       try {
         await api(`/api/application-attempts/${button.dataset.cancelAttempt}/cancel`, { method: "POST" });
         toast("Session annulée");
-        await open(applicationId);
+        await reopen();
       } catch (error) { toast(error.message, 6000); } finally { busy = false; }
     });
     document.querySelectorAll("[data-retry-attempt]").forEach(button => button.onclick = async () => {
@@ -190,7 +211,7 @@
       try {
         await api(`/api/application-attempts/${button.dataset.retryAttempt}/retry`, { method: "POST" });
         toast("Session replacée dans la file");
-        await open(applicationId);
+        await reopen();
       } catch (error) { toast(error.message, 6000); } finally { busy = false; }
     });
     document.querySelectorAll("[data-manual-attempt]").forEach(button => button.onclick = async () => {
@@ -211,7 +232,7 @@
         await loadApps();
         if (!document.querySelector("#viewTracker").hidden) renderTracker();
         toast("Candidature enregistrée comme envoyée");
-        await open(applicationId);
+        await reopen();
       } catch (error) {
         button.disabled = false;
         toast(error.message, 6000);
@@ -223,13 +244,24 @@
       try {
         await api(`/api/application-attempts/${button.dataset.approveAttempt}/approve`, { method: "POST" });
         toast("Envoi autorisé et replacé dans la file");
-        await open(applicationId);
+        await reopen();
       } catch (error) { toast(error.message, 6000); } finally { busy = false; }
     });
   }
 
-  async function open(applicationId) {
+  // ``focus`` (notification) : { attemptId, kind, message, settled } ; ``settled`` est appelé si plus rien n'est à faire.
+  async function open(applicationId, focus = null) {
     const data = await api(`/api/applications/${applicationId}/apply/options`);
+    const focused = focus && (data.attempts || []).find(attempt => attempt.id === focus.attemptId);
+    if (focused) {
+      openDialog(focusHtml(data, focused, focus));
+      bindAttempts(applicationId, data.attempts, () => open(applicationId, focus));
+      document.querySelector("[data-apply-cancel]").onclick = closeDialog;
+      document.querySelector("[data-apply-all]").onclick = () => open(applicationId);
+      const waiting = focused.status === "running" && focus.kind === "waiting_user";
+      if (!waiting && !["needs_user", "failed"].includes(focused.status)) focus.settled?.();
+      return;
+    }
     openDialog(selectionHtml(data));
     bindAttempts(applicationId, data.attempts || []);
     document.querySelector("[data-prepare-documents]")?.addEventListener("click", () => {

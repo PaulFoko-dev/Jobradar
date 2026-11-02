@@ -219,6 +219,15 @@ def delete_offer(offer_id: int):
         c.execute("DELETE FROM offers WHERE id=?", (offer_id,))
 
 
+def get_offer(offer_id: int) -> dict | None:
+    """Offre enrichie telle qu'affichée, ou ``None`` si elle n'existe plus."""
+    with connect() as c:
+        row = c.execute("SELECT search_id FROM offers WHERE id=?", (offer_id,)).fetchone()
+    if row is None:
+        return None
+    return next((offer for offer in list_offers(row["search_id"]) if offer["id"] == offer_id), None)
+
+
 def merge_offer_into(keep_id: int, dup: dict):
     """Fusionne un doublon (liens, description la plus complète, logo) dans l'offre conservée, puis le supprime."""
     with connect() as c:
@@ -1226,6 +1235,18 @@ def submit_application_attempt(attempt_id: int) -> dict:
         return _attempt_row(c.execute("SELECT * FROM application_attempts WHERE id=?", (attempt_id,)).fetchone())
 
 
+def _settle_attempt_notifications(c, attempt_id: int) -> None:
+    """La session a changé d'état : ses demandes d'intervention précédentes ne sont plus à faire.
+
+    Leur clé est libérée : la même demande revenue après une reprise est signalée à nouveau.
+    """
+    c.execute(
+        """UPDATE notifications SET status='dismissed', dedupe_key = dedupe_key || ':reglee:' || id
+           WHERE kind='application_intervention' AND dedupe_key LIKE ? AND dedupe_key NOT LIKE '%:reglee:%'""",
+        (f"attempt:{attempt_id}:%",),
+    )
+
+
 def transition_application_attempt(attempt_id: int, *, expected: set[str], status: str,
                                    intervention: dict | None = None, error: str | None = None) -> dict:
     """Transition compare-and-set : un worker ou l'utilisateur ne peut pas écraser un état concurrent."""
@@ -1247,6 +1268,7 @@ def transition_application_attempt(attempt_id: int, *, expected: set[str], statu
             (status, json.dumps(intervention, ensure_ascii=False) if intervention else None,
              error, submitted, timestamp, attempt_id),
         )
+        _settle_attempt_notifications(c, attempt_id)
         return _attempt_row(c.execute("SELECT * FROM application_attempts WHERE id=?", (attempt_id,)).fetchone())
 
 
@@ -1277,6 +1299,7 @@ def answer_application_attempt(attempt_id: int, answers: list[dict]) -> dict:
              json.dumps({"kind": "answers_provided"}, ensure_ascii=False),
              timestamp, attempt_id),
         )
+        _settle_attempt_notifications(c, attempt_id)
         return _attempt_row(c.execute("SELECT * FROM application_attempts WHERE id=?", (attempt_id,)).fetchone())
 
 

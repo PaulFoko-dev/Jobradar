@@ -74,6 +74,29 @@ def _published_day(o: dict) -> date | None:
     return None
 
 
+def recency_adjustment(o: dict, *, today: date | None = None) -> tuple[int, str | None]:
+    """Bonus/malus de score lié à l'âge réel de l'annonce, explicable dans l'interface.
+
+    La récence compte, mais reste volontairement moins importante que l'adéquation métier : elle ne peut
+    transformer à elle seule une offre hors sujet en bonne correspondance.
+    """
+    published = _published_day(o)
+    if published is None:
+        return 0, None
+    age = max(0, ((today or date.today()) - published).days)
+    if age <= 2:
+        return 8, "Offre très récente (publiée il y a 2 jours ou moins) : +8 points"
+    if age <= 7:
+        return 5, "Offre récente (publiée il y a une semaine ou moins) : +5 points"
+    if age <= 14:
+        return 2, "Offre publiée il y a deux semaines ou moins : +2 points"
+    if age <= 30:
+        return 0, None
+    if age <= 60:
+        return -5, "Offre ancienne (publiée il y a plus de 30 jours) : -5 points"
+    return -10, "Offre très ancienne (publiée il y a plus de 60 jours) : -10 points"
+
+
 def scoring_order(o: dict, crit: dict) -> tuple[float, float]:
     """Ordre d'analyse IA : les offres les plus récentes d'abord, la pertinence départage un même jour."""
     day = _published_day(o)

@@ -279,6 +279,12 @@ def configure_auto_apply(sid: int, body: AutoApplyIn):
     return preparation.configure(sid, **body.model_dump())
 
 
+@app.post("/api/offers/{oid}/auto-apply")
+def queue_offer_for_auto_apply(oid: int):
+    """Choix explicite : ajoute une seule offre sûre à la file, indépendamment du seuil de score."""
+    return preparation.schedule_offer(oid)
+
+
 @app.get("/api/status")
 def status():
     return pipeline.STATE

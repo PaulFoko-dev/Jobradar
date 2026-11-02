@@ -11,7 +11,7 @@ from datetime import datetime
 
 from . import ai, db, notifications
 from .config import load_config
-from .matching import UNKNOWN_CONTRACT, DedupIndex, dedup_key, relevance, scoring_order
+from .matching import UNKNOWN_CONTRACT, DedupIndex, dedup_key, recency_adjustment, relevance, scoring_order
 from .sources import SOURCES
 from .sources.common import polite_pause
 from .sources.jobspy_src import fetch_linkedin_details
@@ -145,7 +145,13 @@ def _score(search_id: int, crit: dict, cfg: dict, stats: dict) -> list[dict]:
                 by_id = {o["id"]: o for o in batch}
                 for res in f.result():
                     if res["id"] in by_id:
-                        res["score"] = max(0, min(100, int(res["score"])))
+                        adjustment, reason = recency_adjustment(by_id[res["id"]])
+                        res["score"] = max(0, min(100, int(res["score"]) + adjustment))
+                        if reason:
+                            key = "match_reasons" if adjustment > 0 else "mismatch_reasons"
+                            reasons = res.setdefault(key, [])
+                            if reason not in reasons:
+                                reasons.append(reason)
                         db.save_analysis(res["id"], res)
                         stats["scored"] += 1
                         analyzed.append(by_id[res["id"]] | res)

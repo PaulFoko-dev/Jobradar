@@ -143,18 +143,31 @@ def _local_midnight_utc() -> datetime:
     return datetime.combine(today, day_time.min, tzinfo=zone).astimezone(timezone.utc)
 
 
-def eligible_offers(search: dict) -> list[dict]:
-    """Offres que l'auto-candidature peut prendre, de la mieux notée à la moins bien notée."""
-    minimum = search["auto_apply"]["min_score"]
-    return [offer for offer in db.list_offers(search["id"])
-            if offer["score"] is not None and offer["score"] > minimum
-            and offer.get("app_id") is None and not offer.get("auto_apply_at_utc")
+def _safe_offer(offer: dict) -> bool:
+    """Garde-fous communs à la sélection automatique et au choix manuel."""
+    return (offer.get("app_id") is None and not offer.get("auto_apply_at_utc")
             and offer["status"] != "ignored" and offer.get("in_zone") is not False
             and offer.get("company_rule") != "excluded" and offer.get("already_applied") is None
             and workflow.nationality_requirement(
                 f"{offer.get('title') or ''} {offer.get('description') or ''}"
             ) is None
-            and (offer.get("deadline") or {}).get("state") != workflow.DeadlineState.EXPIREE.value]
+            and (offer.get("deadline") or {}).get("state") != workflow.DeadlineState.EXPIREE.value)
+
+
+def _recent_first(offers: list[dict]) -> list[dict]:
+    """Les publications les plus récentes passent avant le score, puis avant la découverte locale."""
+    return sorted(offers, key=lambda offer: (
+        offer.get("published_at_utc") or offer.get("date_posted") or offer.get("first_seen") or "",
+        offer.get("score") if offer.get("score") is not None else -1,
+        offer["id"],
+    ), reverse=True)
+
+
+def eligible_offers(search: dict) -> list[dict]:
+    """Offres automatiques sûres, de la plus récente à la plus ancienne."""
+    minimum = search["auto_apply"]["min_score"]
+    return _recent_first([offer for offer in db.list_offers(search["id"])
+                          if offer["score"] is not None and offer["score"] > minimum and _safe_offer(offer)])
 
 
 def _recent_item(raw: dict) -> dict:
@@ -259,6 +272,33 @@ def schedule(search_id: int) -> list[int]:
         LOGGER.info("Auto-candidature : %s offre(s) confiée(s) à la file (recherche %s)", len(created), search_id)
         wake()
     return created
+
+
+def schedule_offer(offer_id: int) -> dict:
+    """Ajoute immédiatement à la file une offre choisie explicitement par l'utilisateur."""
+    with _SCHEDULE_LOCK:
+        offer = db.get_offer(offer_id)
+        if offer is None:
+            raise db.NotFound("Offre introuvable.")
+        search = db.get_search(offer["search_id"])
+        if search is None:
+            raise db.NotFound("Recherche introuvable.")
+        if offer.get("auto_apply_at_utc") or offer.get("app_id") is not None:
+            raise db.Conflict("Cette offre est déjà dans la file ou dans le suivi.")
+        if not _safe_offer(offer):
+            raise db.Conflict("Cette offre ne peut pas être confiée au robot (offre expirée, masquée, hors zone, "
+                              "entreprise exclue ou candidature déjà envoyée).")
+        used = db.auto_applied_offer_count(search["id"], _local_midnight_utc())
+        if used >= search["auto_apply"]["daily_limit"]:
+            raise db.Conflict("Le plafond quotidien d'auto-candidatures est atteint.")
+        if not db.mark_offer_auto_applied(offer_id):
+            raise db.Conflict("Cette offre est déjà dans la file automatique.")
+        application = archive.on_created(db.create_application({"offer_id": offer_id}))
+        job = db.create_preparation_job(application["id"], origin="auto",
+                                        params={"offer_id": offer_id, "selected_by_user": True})
+    LOGGER.info("Auto-candidature : offre %s choisie manuellement et confiée à la file", offer_id)
+    wake()
+    return {"queued": True, "job_id": job["id"], "application_id": application["id"]}
 
 
 def configure(search_id: int, *, enabled: bool, min_score: int, daily_limit: int) -> dict:

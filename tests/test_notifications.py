@@ -87,6 +87,7 @@ def test_pipeline_une_seule_notification_de_bureau(make_offer, search_id, monkey
                  "match_reasons": ["r"], "application_deadline": ""} for o in batch]
 
     monkeypatch.setattr(ai, "score_offers", faux_scoring)
+    monkeypatch.setattr(pipeline, "recency_adjustment", lambda _o: (0, None))
     pipeline.run_search(search_id, score_only=True)
 
     assert desktop == ["2 offres très pertinentes : Intrinsec (93), Beta (88)"]
@@ -263,3 +264,28 @@ def test_notify_sans_outil_ou_plateforme_inconnue(monkeypatch) -> None:
     assert REAL_NOTIFY("x") is False
     monkeypatch.setattr(notifications.sys, "platform", "win32")
     assert REAL_NOTIFY("x") is False
+
+
+# ---------------------------------------------------------------- candidatures assistées
+
+def test_demande_d_intervention_retiree_une_fois_reglee_puis_resignalee(data_dir, desktop) -> None:
+    application = db.create_application({"title": "Stage", "company": "Acme", "url": "https://example.test/job"})
+    document = db.set_document_status(db.create_document(application["id"], "cv", 1, {"kind": "cv"}, {},
+                                                         {"readability": 100, "ready": True}, [])["id"], "pret")
+    db.create_application_attempt(application["id"], mode="assisted", status="queued",
+                                  cv_document_id=document["id"], letter_document_id=None,
+                                  target_url=application["url"], provider="generic")
+    attempt = db.claim_next_application_attempt()
+    intervention = {"kind": "captcha", "message": "Résous le captcha."}
+
+    def ask() -> None:
+        updated = db.transition_application_attempt(attempt["id"], expected={"running"}, status="needs_user",
+                                                    intervention=intervention)
+        assert notifications.application_intervention(updated, intervention) is not None
+
+    ask()
+    assert _kinds() == [("application_intervention", "pending")]
+    db.transition_application_attempt(attempt["id"], expected={"needs_user"}, status="running")
+    assert _kinds() == [("application_intervention", "dismissed")]
+    ask()  # même demande après la reprise : elle doit revenir dans la boîte
+    assert ("application_intervention", "pending") in _kinds()
