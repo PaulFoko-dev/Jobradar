@@ -630,8 +630,14 @@ def test_is_offer_online_reconnait_une_offre_retiree_par_statut(
     [
         "Cette offre n'est plus disponible.",
         "Cette offre a expiré.",
+        "Le poste a été pourvu.",
+        "Le recrutement est clos et les candidatures sont fermées.",
+        "Il est désormais impossible de postuler à cette offre.",
         "This job is no longer available.",
         "We are no longer accepting applications.",
+        "This position has been filled.",
+        "The application period has ended.",
+        "This requisition is closed.",
     ],
 )
 def test_is_offer_online_reconnait_les_messages_de_retrait(monkeypatch: pytest.MonkeyPatch, body: str) -> None:
@@ -650,6 +656,19 @@ def test_is_offer_online_suit_les_redirections_et_envoie_un_user_agent(monkeypat
     assert capture.is_offer_online("https://example.test/depart") is True
     assert [request.url.path for request in requests] == ["/depart", "/offre"]
     assert "Mozilla" in requests[0].headers["User-Agent"]
+
+
+@pytest.mark.parametrize("path", ["/404", "/job-not-found", "/jobs/job-expired", "/position-closed/123"])
+def test_is_offer_online_reconnait_une_redirection_vers_une_page_de_retrait(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/offre":
+            return httpx.Response(302, headers={"Location": path})
+        return httpx.Response(200, text="La page demandée n'existe plus.")
+
+    _install_mock_transport(monkeypatch, handler)
+    assert capture.is_offer_online("https://example.test/offre") is False
 
 
 def test_is_offer_online_reste_indetermine_sur_un_formulaire_de_connexion(monkeypatch: pytest.MonkeyPatch) -> None:

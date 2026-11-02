@@ -553,7 +553,23 @@ def test_closed_offer_is_reported_without_filling_anything(client, site, supervi
     application_browser.process(attempt)
 
     saved = db.get_application_attempt(attempt["id"])
-    assert saved["status"] == "needs_user" and saved["intervention"]["kind"] == "offer_removed"
+    assert saved["status"] == "cancelled" and saved["intervention"]["kind"] == "offer_removed"
+    assert saved["intervention"]["action"] == "skip"
+    application = db.get_application(attempt["application_id"])
+    assert application["offer_online"] is False and application["offer_checked_at_utc"] is not None
+    assert _Site.posts == []
+
+
+def test_closed_offer_is_detected_without_ai(client, site, supervised_browser, monkeypatch) -> None:
+    monkeypatch.setattr(application_supervisor, "mode", lambda: "off")
+    attempt = _claimed_attempt(client, f"{site}/cloturee")
+
+    application_browser.process(attempt)
+
+    saved = db.get_application_attempt(attempt["id"])
+    assert saved["status"] == "cancelled"
+    assert saved["intervention"]["kind"] == "offer_removed"
+    assert db.get_application(attempt["application_id"])["offer_online"] is False
     assert _Site.posts == []
 
 

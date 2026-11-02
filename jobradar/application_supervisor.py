@@ -143,6 +143,10 @@ Dans required_information, indique pour chaque information demandée sa source :
 lettre, motivation, question, sensitive (handicap, origine, religion, santé, casier…) ou unknown.
 Ne propose rien pour une information sensible ou inconnue. Ne propose pas d'action sur un élément absent.
 Remplis les champs inutiles (purpose, source, option) avec une chaîne vide et id=0 pour stop.
+Classe la page en closed_offer dès qu'elle indique explicitement que l'offre est expirée, retirée, pourvue,
+que le recrutement est clos ou que les candidatures ne sont plus acceptées. Dans ce cas, ne propose aucune
+action : JobRadar doit arrêter cette candidature et passer à la suivante. Ne déduis jamais closed_offer d'un
+simple bouton « Postuler » absent : une connexion, un chargement lent ou un formulaire atypique restent possibles.
 """
 
 REVIEW_PROMPT = """Tu relis une candidature remplie automatiquement, juste avant son envoi.

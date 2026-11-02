@@ -766,6 +766,39 @@ def _intervention(attempt_id: int, kind: str, message: str, **extra) -> None:
     notifications.application_intervention(attempt, intervention)
 
 
+def _page_says_offer_removed(page) -> bool:
+    """Détecte localement une annonce close dans le texte visible, sans dépendre de l'IA.
+
+    On exige une page courte ou dépourvue de formulaire : une longue page peut citer une autre offre
+    expirée dans ses recommandations, ses scripts ou son pied de page.
+    """
+    try:
+        text = " ".join(page.locator("body").inner_text(timeout=3_000).split())
+        if not capture.offer_is_unavailable(page.url, page.title(), text):
+            return False
+        has_form = page.locator('input[type="file"], form input[type="email"], form button[type="submit"]').count()
+        return not has_form or len(application_adapters._fold(text)) < 2_500
+    except PlaywrightError:
+        return False
+
+
+def _offer_removed(attempt: dict, message: str) -> None:
+    """Arrête définitivement la tentative et mémorise le retrait dans le suivi et l'archive."""
+    db.set_archive_fields(attempt["application_id"], {
+        "offer_online": 0,
+        "offer_checked_at_utc": db.utc_iso(db.utcnow(), "offer_checked_at"),
+    })
+    try:
+        archive.refresh(attempt["application_id"])
+    except (OSError, db.NotFound):
+        LOGGER.warning("Archive non actualisée après retrait de l'offre", exc_info=True)
+    # Rien à faire pour l'utilisateur : la tentative est close sans notification d'intervention.
+    db.transition_application_attempt(
+        attempt["id"], expected={"running"}, status="cancelled",
+        intervention={"kind": "offer_removed", "message": message, "action": "skip"},
+    )
+
+
 def _mark_application_container(page) -> bool:
     """Marque dans le DOM vivant le conteneur de la candidature visible.
 
@@ -1069,8 +1102,8 @@ def process(attempt: dict) -> None:
         return
     application = db.get_application(attempt["application_id"])
     if application.get("offer_online") is False or capture.is_offer_online(attempt["target_url"]) is False:
-        _intervention(attempt["id"], "offer_removed",
-                      "L'offre n'est plus en ligne. Aucun envoi n'a été effectué.", action="manual_fallback")
+        _offer_removed(attempt, "L'offre n'est plus en ligne. Aucun envoi n'a été effectué ; "
+                       "le robot passe à la candidature suivante.")
         return
     approved = (attempt.get("intervention") or {}).get("kind") == "review_approved"
     lock_dir = (config.system_profile_root() if config.browser_settings()["engine"] == "system"
@@ -1370,6 +1403,11 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
     login_attempted = False
     stalled = loading_waited = False
     for _ in range(application_supervisor.MAX_DECISIONS):
+        if _page_says_offer_removed(page):
+            supervision.journal.note("Offre clôturée détectée dans le texte visible de la page.")
+            _offer_removed(attempt, "La page indique que l'offre est clôturée ou retirée. Aucun envoi n'a été "
+                           "effectué ; le robot passe à la candidature suivante.")
+            return None
         try:
             return provider, _live_form(page, provider), page
         except (application_adapters.NotApplicationForm, ValueError):
@@ -1423,8 +1461,8 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
         kind = decision["page_kind"]
         if kind == "closed_offer":
             supervision.journal.decision(page, snap, decision, ["offre clôturée"])
-            _ai_intervention(attempt, "offer_removed", decision, "L'offre semble clôturée. Rien n'a été envoyé.",
-                             action="manual_fallback")
+            _offer_removed(attempt, "L'offre semble clôturée. Rien n'a été envoyé ; le robot passe à la "
+                           "candidature suivante.")
             return None
         if kind == "confirmation":
             supervision.journal.decision(page, snap, decision, ["page de confirmation avant tout envoi"])
@@ -1671,6 +1709,11 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
             if _choose_resume_method(page, files):
                 supervision.journal.note("Méthode de candidature avec CV sélectionnée automatiquement.")
                 _wait_for_application_ui(page, provider, timeout_ms=8_000)
+        if _page_says_offer_removed(page):
+            supervision.journal.note("Offre clôturée détectée dans le texte visible de la page.")
+            _offer_removed(attempt, "La page indique que l'offre est clôturée ou retirée. Aucun envoi n'a été "
+                           "effectué ; le robot passe à la candidature suivante.")
+            return None
         visible = page.locator("body").inner_text(timeout=5000).casefold()
         if _blocked(page, visible):
             logged_in = False

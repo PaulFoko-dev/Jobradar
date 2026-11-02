@@ -86,14 +86,38 @@ _WALL_PATTERNS = (
 _WALL_TITLE_PATTERNS = (*_WALL_PATTERNS, "captcha", "un instant", "attention required")
 _EXPIRED_PATTERNS = (
     "offre n'est plus disponible",
+    "offre n est plus disponible",
     "cette offre a expire",
     "cette annonce a expire",
     "annonce n'est plus disponible",
+    "annonce n est plus disponible",
     "offre n'est plus en ligne",
+    "offre n est plus en ligne",
+    "poste a ete pourvu",
+    "poste est pourvu",
+    "poste n est plus vacant",
+    "recrutement est termine",
+    "recrutement est clos",
+    "candidatures sont closes",
+    "candidatures sont fermees",
+    "ne recrutons plus pour ce poste",
+    "impossible de postuler a cette offre",
     "this job is no longer available",
     "this position is no longer available",
     "no longer accepting applications",
     "job has expired",
+    "position has expired",
+    "position has been filled",
+    "role has been filled",
+    "applications are closed",
+    "application period has ended",
+    "job posting has been removed",
+    "vacancy has been withdrawn",
+    "this requisition is closed",
+)
+_EXPIRED_URL = re.compile(
+    r"(?:^|/)(?:404|job-not-found|jobs-not-found|job-expired|position-closed|posting-closed|"
+    r"vacancy-closed|requisition-closed)(?:[/._-]|$)", re.IGNORECASE,
 )
 _REJECT_SELECTORS = (
     "#onetrust-reject-all-handler",
@@ -1163,6 +1187,15 @@ def _visible_text(markup: str) -> tuple[str, str]:
     return title, " ".join(html.unescape(body).split())
 
 
+def offer_is_unavailable(url: str, title: str, text: str) -> bool:
+    """Signaux explicites et partagés indiquant qu'une offre ne reçoit plus de candidatures."""
+    try:
+        path = httpx.URL(url).path
+    except (TypeError, ValueError):
+        path = ""
+    return bool(_EXPIRED_URL.search(path) or _contains_any(_normalize_text(f"{title} {text}"), _EXPIRED_PATTERNS))
+
+
 def is_offer_online(url: str, *, timeout_s: int = 20) -> bool | None:
     """True en ligne, False retirée, None indéterminé (erreur réseau, blocage)."""
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, int) or timeout_s < 1:
@@ -1189,7 +1222,7 @@ def is_offer_online(url: str, *, timeout_s: int = 20) -> bool | None:
         return None
 
     title, text = _visible_text(markup)
-    if _contains_any(_normalize_text(f"{title} {text}"), _EXPIRED_PATTERNS):
+    if offer_is_unavailable(final_url, title, text):
         return False
     password_field = re.search(r"<input\b[^>]*\btype\s*=\s*[\"']?password", markup, re.IGNORECASE) is not None
     if _looks_like_wall(final_url, title, text, password_field=password_field):
