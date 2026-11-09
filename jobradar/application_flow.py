@@ -122,6 +122,72 @@ def _manual_help(application_id: int, attempt: dict) -> dict:
     }
 
 
+ACTIVE_ATTEMPTS = {"manual_open", "queued", "running", "needs_user"}
+
+
+def _sent(application: dict) -> bool:
+    return bool(application.get("applied_at_utc")) or application.get("status") not in {"consultee", "abandon"}
+
+
+def twin_of(application: dict, others: list[dict]) -> dict | None:
+    """Candidature équivalente parmi ``others`` : même page, ou même entreprise (variantes, sites relais compris)
+    et même intitulé, selon les règles de dédoublonnage des offres."""
+    index = matching.DedupIndex()
+    by_id = {}
+    for other in others:
+        if other["id"] == application["id"]:
+            continue
+        index.add(other, str(other["id"]), other["id"])
+        by_id[other["id"]] = other
+    found = index.find(application)
+    return by_id.get(found[1]) if found else None
+
+
+def already_applied_elsewhere(application_id: int) -> dict | None:
+    """Candidature équivalente déjà envoyée (autre annonce de la même offre) : un second envoi serait un doublon."""
+    applications = db.list_applications()
+    current = next((item for item in applications if item["id"] == application_id), None)
+    if current is None:
+        return None
+    sent = [item for item in applications if item["id"] != application_id and _sent(item)]
+    return same_target_sent(application_id, current.get("url")) or twin_of(current, sent)
+
+
+def merge_duplicate_applications() -> list[tuple[int, int]]:
+    """Fusionne les candidatures en double : celle qui n'est pas partie passe en « Abandon », avec une note qui renvoie
+    vers l'autre (réversible). Ordre de préférence : déjà envoyée, annonce de l'entreprise plutôt que d'un site relais,
+    meilleur score, plus ancienne. Deux candidatures déjà envoyées ne sont jamais modifiées."""
+    applications = [item for item in db.list_applications() if item.get("status") != "abandon"]
+    attempts = {item["id"]: db.list_application_attempts(item["id"]) for item in applications}
+    # Protègent une candidature : un robot en train de travailler, un panneau manuel ouvert, ou un clic d'envoi.
+    # Une tentative bloquée (« needs_user », « queued ») sur un doublon est annulée : la reprendre enverrait un doublon.
+    active = {app_id for app_id, items in attempts.items() for attempt in items
+              if attempt["status"] in {"running", "manual_open"} or attempt.get("submit_clicked_at_utc")}
+    ordered = sorted(applications, key=lambda item: (not _sent(item), matching.is_relay(item.get("company")),
+                                                     -(item.get("score") or 0), item["id"]))
+    kept: list[dict] = []
+    merged = []
+    for item in ordered:
+        twin = twin_of(item, kept)
+        if twin is None or _sent(item) or item["id"] in active:
+            kept.append(item)
+            continue
+        note = (f"Doublon de la candidature n°{twin['id']} « {twin.get('title') or ''} » ({twin.get('company') or ''}) : "
+                "même offre publiée sous une autre annonce. Mise en « Abandon » automatiquement pour éviter un double "
+                "envoi ; remets-la dans une autre colonne si c'est une erreur.")
+        for attempt in attempts.get(item["id"], []):
+            if attempt["status"] in {"needs_user", "queued"}:
+                db.transition_application_attempt(
+                    attempt["id"], expected={"needs_user", "queued"}, status="cancelled",
+                    intervention={"kind": "duplicate", "action": "skip",
+                                  "message": f"Doublon de la candidature n°{twin['id']} : tentative annulée."})
+        current = (item.get("notes") or "").strip()
+        db.update_application(item["id"], {"status": "abandon",
+                                           "notes": f"{current}\n\n{note}".strip() if current else note})
+        merged.append((item["id"], twin["id"]))
+    return merged
+
+
 def same_target_sent(application_id: int, url: str | None) -> dict | None:
     """Autre candidature déjà envoyée vers la même page (annonces republiées sous un autre titre)."""
     key = matching.target_key(url)
@@ -148,7 +214,7 @@ def start(application_id: int, *, mode: str, cv_document_id: int | None,
         raise db.Conflict("Une session de candidature est déjà ouverte pour cette offre : reprends-la ou annule-la.")
     if any(attempt["status"] == "submitted" for attempt in current["attempts"]):
         raise db.Conflict("Une candidature a déjà été envoyée pour cette offre.")
-    twin = same_target_sent(application_id, current["application"]["url"])
+    twin = already_applied_elsewhere(application_id)
     if twin:
         raise db.Conflict(f"Tu as déjà postulé à cette même offre via « {twin['title']} » ({twin.get('company') or ''}) : "
                           "les deux annonces mènent au même formulaire. Rien n'a été envoyé.")

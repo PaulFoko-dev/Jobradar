@@ -43,20 +43,35 @@ def _enrich_linkedin(o: dict):
     polite_pause(1)
 
 
+def _merge_duplicate_applications() -> None:
+    """Candidatures en double (même offre, autre annonce) fusionnées avant le nettoyage des offres."""
+    from . import application_flow  # import local : évite une dépendance circulaire au chargement
+
+    try:
+        merged = application_flow.merge_duplicate_applications()
+    except Exception as exc:  # coffre fermé, base occupée : le scan continue, la fusion reprendra plus tard
+        _log(f"Fusion des candidatures en double reportée : {exc}")
+        return
+    if merged:
+        _log("Candidatures en double fusionnées : " + ", ".join(f"n°{drop} → n°{keep}" for drop, keep in merged))
+
+
 def cleanup(search_id: int, crit: dict) -> DedupIndex:
     """Applique les règles de pertinence et de dédoublonnage aux offres déjà en base.
     Ne touche jamais aux offres suivies, en favori, ou jugées pertinentes par l'IA (score ≥ 50)."""
     offers = sorted(db.list_offers(search_id), key=lambda o: (o["score"] is None, -(o["score"] or 0)))
     index, removed, merged = DedupIndex(), 0, 0
     for o in offers:
-        protected = bool(o.get("app_id")) or o["status"] == "fav" or (o["score"] or 0) >= 50
+        followed = bool(o.get("app_id")) and o.get("app_status") != "abandon"
+        protected = followed or o["status"] == "fav" or (o["score"] or 0) >= 50
         reason = relevance(o, crit)
         if reason and reason != UNKNOWN_CONTRACT and not protected:
             db.delete_offer(o["id"])
             removed += 1
             continue
         found = index.find(o)
-        if found and found[1] and not protected:
+        # Un doublon est fusionné même bien noté : seules une candidature en cours ou un favori le gardent à part.
+        if found and found[1] and not (followed or o["status"] == "fav"):
             db.merge_offer_into(found[1], o)
             merged += 1
             continue
@@ -223,6 +238,7 @@ def run_search(search_id: int, score_only: bool = False, *, send_email: bool = T
         cfg = load_config()
         run_id = db.start_run(search_id)
 
+        _merge_duplicate_applications()
         index = cleanup(search_id, crit)
         if not score_only:
             _collect(search_id, crit, cfg, index, stats)

@@ -55,6 +55,12 @@ async def lifespan(_app: FastAPI):
     db.init()
     load_config()
     try:
+        merged = application_flow.merge_duplicate_applications()
+        if merged:
+            LOGGER.info("Candidatures en double fusionnées : %s", merged)
+    except Exception:
+        LOGGER.warning("Fusion des candidatures en double reportée (coffre fermé ?)", exc_info=True)
+    try:
         archive.start_queue()  # file de capture, rattrapage des archives manquantes, reprise des captures
     except Exception:
         LOGGER.exception("Archives des candidatures indisponibles ; le reste de JobRadar fonctionne.")
