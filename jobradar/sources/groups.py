@@ -28,6 +28,8 @@ GROUPS = [
     {"name": "Assystem", "ats": "smartrecruiters", "slug": "Assystem"},
     {"name": "Artelia", "ats": "smartrecruiters", "slug": "Artelia"},
     {"name": "Forvis Mazars", "ats": "smartrecruiters", "slug": "Mazars"},
+    # Cybersécurité (vérifié en novembre 2026 : offres de stage PFE audit et pentest)
+    {"name": "Advens", "ats": "smartrecruiters", "slug": "Advens"},
     {"name": "Ubisoft", "ats": "smartrecruiters", "slug": "Ubisoft2"},
     {"name": "Accor", "ats": "smartrecruiters", "slug": "Accor"},
     {"name": "Bosch", "ats": "smartrecruiters", "slug": "BoschGroup"},
