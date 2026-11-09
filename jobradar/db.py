@@ -1267,6 +1267,14 @@ ATTEMPT_STATUSES = {"manual_open", "queued", "running", "needs_user", "submitted
 SUBMIT_GUARD_MESSAGE = ("Le bouton d'envoi a déjà été cliqué pour cette session : la candidature est peut-être partie. "
                         "Pour éviter un doublon, JobRadar ne la renvoie pas. Vérifie sur le site de l'entreprise, "
                         "puis indique si elle est partie ou passe en mode manuel.")
+def list_unconfirmed_submissions() -> list[dict]:
+    """Envois cliqués dont la confirmation n'a pas été reconnue (en attente de vérification)."""
+    with connect() as c:
+        rows = c.execute("""SELECT * FROM application_attempts
+                            WHERE status='needs_user' AND submit_clicked_at_utc IS NOT NULL""").fetchall()
+    return [_attempt_row(row) for row in rows]
+
+
 UNCONFIRMED_SUBMISSION = {
     "kind": "confirmation_missing", "action": "confirm_sent",
     "message": ("Le bouton d'envoi a été cliqué, mais aucune page de confirmation n'a été reconnue. Vérifie sur le "

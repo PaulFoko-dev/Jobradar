@@ -80,6 +80,8 @@ DEFAULT_CONFIG = {
         "username": "",
         "kinds": ["high_score_offer", "follow_up_due", "interview_reminder"],
     },
+    # Lecture locale de la boîte de réception (réponses des recruteurs, accusés de réception) ; désactivée par défaut.
+    "inbox": {"enabled": False, "imap_host": "", "days": 30},
     "browser": {"engine": "system", "executable": "", "cdp_port": 9333, "keep_open": True,
                 "ai_supervision": "always", "human_wait_minutes": 10},
     # Nombre d'offres envoyées à Claude par appel, et appels en parallèle.

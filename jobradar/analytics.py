@@ -140,6 +140,8 @@ def application_statistics() -> dict:
                      "base_cv": composition.get("base_source_id") or "Non renseigné",
                      "template": TEMPLATE_LABELS.get(template_id, template_id or "Non renseigné"),
                      "mode": {"manual": "Manuel", "assisted": "Assisté par IA"}.get(attempt.get("mode"), "Non renseigné"),
+                     "platform": attempt.get("provider") or "Non renseignée",
+                     "score": _score_bucket(application.get("score")),
                      "sent": bool(application.get("applied_at_utc") or status in SENT_STATUSES),
                      "response": status in RESPONSE_STATUSES,
                      "interview": status in {"entretien_rh", "entretien_tech", "retenu"},
@@ -150,4 +152,39 @@ def application_statistics() -> dict:
                         "response_rate": round(100 * responses / sent) if sent else None,
                         "average_response_days": round(sum(delays) / len(delays), 1) if delays else None},
             "by_source": _group(rows, "source"), "by_base_cv": _group(rows, "base_cv"),
-            "by_template": _group(rows, "template"), "by_mode": _group(rows, "mode")}
+            "by_template": _group(rows, "template"), "by_mode": _group(rows, "mode"),
+            "by_platform": _group(rows, "platform"), "by_score": _group(rows, "score")}
+
+
+def _score_bucket(score) -> str:
+    if not isinstance(score, int | float):
+        return "Sans score"
+    return "90 et plus" if score >= 90 else "80 à 89" if score >= 80 else "70 à 79" if score >= 70 else "Moins de 70"
+
+
+def robot_statistics() -> dict:
+    """Mesures du robot, sans aucune valeur privée : réussite par plateforme, causes d'arrêt, interventions."""
+    with db.connect() as conn:
+        attempts = [dict(row) for row in conn.execute(
+            "SELECT provider, status, intervention_json FROM application_attempts WHERE mode='assisted'")]
+    platforms: dict[str, dict] = {}
+    causes: dict[str, int] = {}
+    for attempt in attempts:
+        entry = platforms.setdefault(attempt["provider"] or "inconnue", {"attempts": 0, "submitted": 0, "stopped": 0})
+        entry["attempts"] += 1
+        entry["submitted"] += attempt["status"] == "submitted"
+        if attempt["status"] in {"needs_user", "failed"}:
+            entry["stopped"] += 1
+            kind = (_json(attempt.get("intervention_json"), {}) or {}).get("kind") or "inconnue"
+            causes[kind] = causes.get(kind, 0) + 1
+    total = sum(entry["attempts"] for entry in platforms.values())
+    submitted = sum(entry["submitted"] for entry in platforms.values())
+    stopped = sum(entry["stopped"] for entry in platforms.values())
+    return {"attempts": total, "submitted": submitted,
+            "success_rate": round(100 * submitted / total) if total else None,
+            "interventions_per_application": round(stopped / total, 2) if total else None,
+            "by_platform": [{"label": name} | entry | {
+                "success_rate": round(100 * entry["submitted"] / entry["attempts"]) if entry["attempts"] else None}
+                for name, entry in sorted(platforms.items(), key=lambda pair: -pair[1]["attempts"])],
+            "stop_causes": [{"kind": kind, "count": count}
+                            for kind, count in sorted(causes.items(), key=lambda pair: -pair[1])]}

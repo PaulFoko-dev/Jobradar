@@ -91,6 +91,15 @@ def main():
         pipeline.log_email(notifications.deliver_email_digest(), print)
         maintain_archives()
         try:
+            from . import inbox
+
+            found = inbox.scan()
+            if found.get("enabled"):
+                print(f"Boîte de réception : {found['proposals']} réponse(s) proposée(s), "
+                      f"{found['confirmed']} envoi(s) confirmé(s)")
+        except Exception as exc:  # boîte injoignable : l'actualisation continue
+            print(f"Boîte de réception : lecture impossible ({exc})")
+        try:
             from . import private_io
 
             sealed = private_io.seal_tree()  # captures et PDF écrits directement par le navigateur

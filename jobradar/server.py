@@ -25,6 +25,7 @@ from . import (
     contacts,
     db,
     export,
+    inbox,
     interview_prep,
     interview_simulation,
     login_credentials,
@@ -146,6 +147,38 @@ def confirm_profile_answer(key: str):
         return profile.confirm_answer(key)
     except profile.ProfileError as exc:
         raise HTTPException(404, str(exc))
+
+
+class InboxIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool
+    imap_host: str = Field(default="", max_length=253, pattern=r"^[A-Za-z0-9.-]*$")
+    days: StrictInt = Field(default=30, ge=1, le=120)
+
+
+@app.get("/api/inbox")
+def inbox_settings():
+    return inbox.settings()
+
+
+@app.put("/api/inbox")
+def put_inbox_settings(body: InboxIn):
+    config.save_config_section("inbox", body.model_dump())
+    return inbox.settings()
+
+
+@app.get("/api/analytics/robot")
+def robot_analytics():
+    return analytics.robot_statistics()
+
+
+@app.post("/api/inbox/scan")
+def inbox_scan():
+    """Lecture locale de la boîte de réception (réponses, accusés) ; rien n'est envoyé à l'IA."""
+    try:
+        return inbox.scan()
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.get("/api/vault")

@@ -33,6 +33,17 @@ def application_intervention(attempt: dict, intervention: dict) -> dict | None:
     return created
 
 
+def response_detected(application: dict, status: str, subject: str, *, dedupe: str) -> dict | None:
+    """Réponse de recruteur repérée dans la boîte de réception : un statut est proposé, jamais appliqué seul."""
+    payload = {"application_id": application["id"], "title": application.get("title"),
+               "company": application.get("company"), "proposed_status": status, "subject": subject[:200]}
+    with db.connect() as c:
+        created = _insert(c, "response_detected", dedupe, payload)
+    if created:
+        deliver_desktop([created], f"Réponse probable de {application.get('company') or 'un recruteur'}.")
+    return created
+
+
 def application_submitted(attempt: dict) -> dict | None:
     """Confirme localement un envoi assisté détecté, une seule fois par tentative."""
     application = db.get_application(attempt["application_id"])

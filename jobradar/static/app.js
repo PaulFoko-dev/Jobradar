@@ -454,6 +454,7 @@ const AA_STEPS = {
   queued: "en attente", prepare: "rédaction des documents", render: "création des fichiers", apply: "mise en file de l'envoi",
   queued_for_submission: "envoi assisté lancé", manual: "documents prêts, envoi manuel requis",
   offer_removed: "offre retirée, ignorée sans rédaction",
+  duplicate: "déjà postulé via une autre annonce",
 };
 
 function autoApplyStepLabel(job) {
@@ -472,6 +473,7 @@ function autoApplyResult(job) {
     if (job.status === "running") return `Préparation en cours · ${autoApplyStepLabel(job)}…`;
     if (job.step === "manual") return "Documents prêts · envoi manuel requis";
     if (job.step === "offer_removed") return "Offre retirée : ignorée, aucun document rédigé";
+    if (job.step === "duplicate") return "Doublon : même formulaire déjà envoyé via une autre annonce";
     if (job.status === "done") return "Préparation terminée sans envoi assisté";
     return autoApplyStepLabel(job);
   }
@@ -1128,6 +1130,7 @@ async function loadTrackerInsights() {
     trackerAnalytics = applications;
     renderSkillInsights(skills);
     renderApplicationInsights();
+    api("/api/analytics/robot").then(renderRobotInsights).catch(() => {});
   } catch (error) {
     $("#skillInsights").innerHTML = `<p class="muted small">${esc(error.message)}</p>`;
     $("#applicationInsights").innerHTML = `<p class="muted small">${esc(error.message)}</p>`;
@@ -1145,6 +1148,25 @@ function renderSkillInsights(data) {
     <div><b>${esc(item.name)}</b><span>${item.offers} offre${item.offers > 1 ? "s" : ""} · ${item.share} %</span></div>
     <div class="insight-bar"><i style="--w:${Math.round(100 * item.offers / max)}%"></i></div>
   </div>`).join("");
+}
+
+const STOP_LABELS = {
+  confirmation_missing: "confirmation d'envoi non reconnue", not_application_form: "formulaire introuvable",
+  offer_removed: "offre retirée", verification_failed: "champ relu différent", missing_fields: "question sans réponse",
+  browser_retry_scheduled: "navigateur indisponible", page_validation_failed: "erreur affichée par le site",
+  login: "connexion requise", captcha: "captcha", review_required: "relecture demandée",
+};
+
+function renderRobotInsights(data) {
+  const root = $("#robotInsights");
+  if (!data.attempts) { root.innerHTML = `<p class="muted small">Aucune candidature assistée pour l'instant.</p>`; return; }
+  const platforms = data.by_platform.map(row => `<tr><td>${esc(row.label)}</td><td>${row.attempts}</td><td>${row.submitted}</td>
+    <td>${row.success_rate == null ? "–" : `${row.success_rate} %`}</td></tr>`).join("");
+  const causes = data.stop_causes.slice(0, 6).map(row => `<li>${esc(STOP_LABELS[row.kind] || row.kind)} : ${row.count}</li>`).join("");
+  root.innerHTML = `<p class="small"><b>${data.success_rate ?? "–"} %</b> d'envois terminés sans toi · <b>${data.interventions_per_application ?? "–"}</b>
+    intervention par candidature</p>
+    <table><thead><tr><th>Plateforme</th><th>Tentatives</th><th>Envoyées</th><th>Réussite</th></tr></thead><tbody>${platforms}</tbody></table>
+    ${causes ? `<p class="small muted">Principales causes d'arrêt :</p><ul class="small">${causes}</ul>` : ""}`;
 }
 
 function renderApplicationInsights() {
@@ -2263,6 +2285,7 @@ const NOTIF_ICONS = {
   auto_apply_failed: `<svg viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5M12 17h.01"/></svg>`,
   auto_apply_manual: `<svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 14l2 2 4-4"/></svg>`,
   application_submitted: `<svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>`,
+  response_detected: `<svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>`,
 };
 
 function notifText(n) {
@@ -2279,6 +2302,10 @@ function notifText(n) {
   if (n.kind === "auto_apply_manual") return { head: "Documents prêts · envoi manuel", who, extra: p.message || "" };
   if (n.kind === "application_intervention") return { head: "Candidature en attente", who, extra: p.message || "Une action est nécessaire." };
   if (n.kind === "application_submitted") return { head: "Candidature envoyée", who, extra: "Les preuves ont été archivées." };
+  if (n.kind === "response_detected") return {
+    head: p.proposed_status === "refuse" ? "Réponse probable : refus" : "Réponse probable : entretien",
+    who, extra: `« ${p.subject || ""} » — clique pour confirmer le changement de statut`,
+  };
   return { head: "Notification", who, extra: "" };
 }
 
@@ -2355,6 +2382,15 @@ async function openNotif(n) {
     if (state.currentId !== p.search_id || $("#viewResults").hidden) await openResults(p.search_id);
     if (state.offers.some(o => o.id === p.offer_id)) openModal(p.offer_id);
     else toast("Cette offre n'existe plus.");
+  } else if (n.kind === "response_detected") {
+    const label = p.proposed_status === "refuse" ? "Refusée" : "Entretien RH";
+    if (confirm(`Passer « ${p.title || "cette candidature"} » (${p.company || ""}) au statut « ${label} » ?\n\nE-mail : ${p.subject || ""}`)) {
+      try {
+        await api(`/api/applications/${p.application_id}`, { method: "PATCH", body: { status: p.proposed_status } });
+        toast("Statut mis à jour");
+      } catch (e) { toast(e.message, 5000); }
+    }
+    await openTracker();
   } else if (["application_intervention", "auto_apply_failed", "auto_apply_manual"].includes(n.kind)) {
     await openTracker();
     if (!state.apps.some(a => a.id === p.application_id)) { toast("Cette candidature n'est plus suivie."); dismiss(); return; }
@@ -2674,6 +2710,9 @@ function archivesSettingsHtml() {
           à l'IA (jamais l'identité ni les coordonnées)</label>
         <div class="arch-row"><button class="btn" id="vOpen" hidden>Activer le coffre</button>
           <button class="btn" id="vMigrate" hidden>Chiffrer les données restantes</button></div>
+        <label class="vault-check"><input type="checkbox" id="iEnabled"> Lire ma boîte de réception (en local) pour repérer
+          les réponses des recruteurs et confirmer les envois : même compte que l'e-mail ci-dessous, rien n'est envoyé à l'IA</label>
+        <div class="arch-row"><button class="btn sm" id="iScan">Vérifier ma boîte maintenant</button></div>
         <div id="vPlain" hidden><p class="e-note warn small"><b>Sauvegardes antérieures au coffre, en clair :</b> <span id="vPlainList"></span></p>
           <div class="arch-row"><button class="btn danger" id="vPlainDelete">Supprimer ces sauvegardes en clair</button></div></div>
       </fieldset>
@@ -2781,6 +2820,19 @@ function bindArchivesSettings() {
       toast(`${done.deleted} sauvegarde(s) en clair supprimée(s)`);
       $("#vPlain").hidden = true;
     } catch (error) { toast(error.message, 5000); }
+  };
+  api("/api/inbox").then(inboxState => ($("#iEnabled").checked = inboxState.enabled)).catch(() => {});
+  $("#iEnabled").onchange = async event => {
+    try { await api("/api/inbox", { method: "PUT", body: { enabled: event.target.checked } }); toast("Réglage enregistré"); }
+    catch (error) { toast(error.message, 5000); event.target.checked = !event.target.checked; }
+  };
+  $("#iScan").onclick = async event => {
+    try {
+      const done = await busy(event.currentTarget, "Lecture…", () => api("/api/inbox/scan", { method: "POST" }));
+      toast(done.enabled ? `${done.messages} message(s) lus : ${done.proposals} réponse(s) proposée(s), ${done.confirmed} envoi(s) confirmé(s)`
+        : "Active d'abord la lecture de la boîte de réception.", 6000);
+      loadNotifs();
+    } catch (error) { toast(error.message, 6000); }
   };
   $("#vOpen").onclick = () => window.JobRadarVault?.open();
   $("#vMigrate").onclick = () => window.JobRadarVault?.migrate();

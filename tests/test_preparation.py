@@ -392,6 +392,7 @@ def test_offre_retiree_ignoree_avant_toute_redaction(monkeypatch) -> None:
     monkeypatch.setattr(preparation.db, "get_application",
                         lambda _id: {"id": 7, "url": "https://ats.example.com/job/1", "offer_online": None})
     monkeypatch.setattr(capture, "is_offer_online", lambda _url, **_kw: False)
+    monkeypatch.setattr(preparation.application_flow, "same_target_sent", lambda *_a: None)
     monkeypatch.setattr(preparation.db, "set_archive_fields", lambda app_id, fields: archived.append(fields))
     monkeypatch.setattr(preparation.db, "update_preparation_job", lambda job_id, **fields: updates.append(fields))
     monkeypatch.setattr(preparation.tailoring, "prepare", lambda *a, **k: pytest.fail("rédaction inutile"))

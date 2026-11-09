@@ -109,6 +109,11 @@ def _offer_removed_before_preparation(application_id: int) -> bool:
 def _run_auto(job: dict) -> None:
     application_id = job["application_id"]
     params = job["params"]
+    application = db.get_application(application_id)
+    if application_flow.same_target_sent(application_id, application.get("url")):
+        # Même formulaire déjà envoyé via une autre annonce : aucun doublon, aucune rédaction inutile.
+        db.update_preparation_job(job["id"], status="done", step="duplicate")
+        return
     if _offer_removed_before_preparation(application_id):
         # Offre retirée : aucune génération inutile et rien à faire pour l'utilisateur, donc aucune notification.
         db.update_preparation_job(job["id"], status="done", step="offer_removed")

@@ -51,3 +51,21 @@ def test_tracker_exposes_accessible_analytics_ui() -> None:
     assert 'id="statsDimension"' in html
     assert "/api/analytics/skills" in script
     assert "/api/analytics/applications" in script
+
+
+def test_robot_statistics_count_success_and_stop_causes(client) -> None:
+    from jobradar import analytics, db
+
+    application = client.post("/api/applications", json={"title": "Stage", "company": "Acme",
+                                                         "url": "https://example.com/o"}).json()
+    document = db.create_document(application["id"], "cv", 1, {"kind": "cv"}, {}, {"readability": 100, "ready": True}, [])
+    with db.connect() as conn:
+        for status, intervention in (("submitted", None), ("needs_user", '{"kind": "offer_removed"}')):
+            conn.execute("""INSERT INTO application_attempts(application_id, mode, status, cv_document_id, target_url,
+                            provider, intervention_json, created_at_utc, updated_at_utc)
+                            VALUES (?, 'assisted', ?, ?, 'https://example.com', 'workday', ?, 'x', 'x')""",
+                         (application["id"], status, document["id"], intervention))
+    stats = analytics.robot_statistics()
+    assert stats["attempts"] == 2 and stats["success_rate"] == 50 and stats["interventions_per_application"] == 0.5
+    assert stats["by_platform"][0]["label"] == "workday" and stats["stop_causes"] == [{"kind": "offer_removed", "count": 1}]
+    assert "by_score" in analytics.application_statistics()
