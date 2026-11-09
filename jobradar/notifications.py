@@ -33,6 +33,16 @@ def application_intervention(attempt: dict, intervention: dict) -> dict | None:
     return created
 
 
+def source_attention(source: str, message: str) -> dict | None:
+    """Source qui demande une action (reconnexion JobTeaser…) : au plus une notification par source et par jour."""
+    day = db.utc_iso(db.utcnow(), "created_at")[:10]
+    with db.connect() as c:
+        created = _insert(c, "source_login", f"source:{source}:{day}", {"source": source, "message": message})
+    if created:
+        deliver_desktop([created], message)
+    return created
+
+
 def response_detected(application: dict, status: str, subject: str, *, dedupe: str) -> dict | None:
     """Réponse de recruteur repérée dans la boîte de réception : un statut est proposé, jamais appliqué seul."""
     payload = {"application_id": application["id"], "title": application.get("title"),

@@ -42,7 +42,7 @@ ton abonnement. Pas de clé API, pas de serveur distant : tes recherches et tes 
 | | |
 |---|---|
 | 🧠 **Analyse des critères par IA** | Formulaire et/ou langage naturel, puis requêtes, mots-clés et exclusions, modifiables avant lancement |
-| 🌐 **Multi-sources** | Indeed · LinkedIn · Welcome to the Jungle · HelloWork · La Bonne Alternance · Arbeitnow · Remote OK · France Travail · pages carrières (Greenhouse, Lever, SmartRecruiters, Workday) · catalogue de grands groupes (Thales, Airbus, Accenture, Alten, Sanofi…) |
+| 🌐 **Multi-sources** | Indeed · LinkedIn · Welcome to the Jungle · HelloWork · JobTeaser (connexion école) · La Bonne Alternance · Arbeitnow · Remote OK · France Travail · pages carrières (Greenhouse, Lever, SmartRecruiters, Workday) · catalogue de grands groupes (Thales, Airbus, Accenture, Alten, Sanofi…) |
 | 🧹 **Filtrage et dédoublonnage** | Offres hors domaine ou d'un autre type de contrat écartées avant l'IA ; une même offre publiée sur plusieurs sites n'apparaît qu'une fois, avec tous ses liens |
 | 📊 **Score de pertinence expliqué** | Points forts et points faibles, résumé, missions, profil, points d'attention |
 | 📝 **Aide au CV** | Mots-clés exacts de l'offre à reprendre (copiables) et conseils d'adaptation |
@@ -359,8 +359,11 @@ flowchart LR
 - La Bonne Alternance est réservée aux usages non commerciaux. Arbeitnow et Remote OK imposent de conserver
   leur attribution et un lien vers l'annonce d'origine ; JobRadar les affiche comme source de chaque offre.
 - L'API France Travail peut être temporairement restreinte. Son absence n'interrompt jamais les autres sources.
-- JobTeaser et l'APEC ne sont pas pris en charge : leurs offres sont derrière une connexion (école) ou une
-  protection anti-robot.
+- **JobTeaser** (offres réservées aux étudiants) est lu dans le navigateur de JobRadar, après une connexion par ton
+  école (Réglages → Candidatures → « Me connecter à JobTeaser », puis cocher la source). Si la session expire,
+  JobRadar se reconnecte seul avec l'identifiant enregistré pour la page de l'école, sinon il saute JobTeaser pour ce
+  scan et te prévient. Collecte à faible volume, uniquement quand JobRadar est ouvert, pour un usage personnel.
+- L'APEC n'est pas prise en charge : ses offres sont derrière une protection anti-robot que JobRadar ne contourne pas.
 
 ## 🩺 Dépannage
 

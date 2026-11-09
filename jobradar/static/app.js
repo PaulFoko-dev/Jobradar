@@ -2335,7 +2335,15 @@ const NOTIF_ICONS = {
   auto_apply_manual: `<svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 14l2 2 4-4"/></svg>`,
   application_submitted: `<svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>`,
   response_detected: `<svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>`,
+  source_login: `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`,
 };
+
+async function openJobteaserLogin() {
+  try {
+    const done = await api("/api/settings/browser/jobteaser", { method: "POST" });
+    toast(`${done.name} est ouvert sur JobTeaser : connecte-toi par ton école, puis ferme simplement la fenêtre.`, 7000);
+  } catch (error) { toast(error.message, 6000); }
+}
 
 function notifText(n) {
   const p = n.payload || {};
@@ -2351,6 +2359,8 @@ function notifText(n) {
   if (n.kind === "auto_apply_manual") return { head: "Documents prêts · envoi manuel", who, extra: p.message || "" };
   if (n.kind === "application_intervention") return { head: "Candidature en attente", who, extra: p.message || "Une action est nécessaire." };
   if (n.kind === "application_submitted") return { head: "Candidature envoyée", who, extra: "Les preuves ont été archivées." };
+  if (n.kind === "source_login") return { head: "JobTeaser : connexion nécessaire", who: "",
+    extra: p.message || "Reconnecte-toi dans le navigateur de JobRadar." };
   if (n.kind === "response_detected") return {
     head: p.proposed_status === "refuse" ? "Réponse probable : refus" : "Réponse probable : entretien",
     who, extra: `« ${p.subject || ""} » — clique pour confirmer le changement de statut`,
@@ -2431,6 +2441,8 @@ async function openNotif(n) {
     if (state.currentId !== p.search_id || $("#viewResults").hidden) await openResults(p.search_id);
     if (state.offers.some(o => o.id === p.offer_id)) openModal(p.offer_id);
     else toast("Cette offre n'existe plus.");
+  } else if (n.kind === "source_login") {
+    await openJobteaserLogin();
   } else if (n.kind === "response_detected") {
     const label = p.proposed_status === "refuse" ? "Refusée" : "Entretien RH";
     if (confirm(`Passer « ${p.title || "cette candidature"} » (${p.company || ""}) au statut « ${label} » ?\n\nE-mail : ${p.subject || ""}`)) {
@@ -2674,6 +2686,15 @@ function browserSettingsHtml() {
     <button class="btn primary" id="bSave">Enregistrer</button>
     <button class="btn" id="bOpen" title="Ouvre le navigateur avec le profil réservé à JobRadar : connecte-toi une fois à tes comptes, il s'en souviendra.">Ouvrir le navigateur pour me connecter</button>
     <button class="btn" id="bGoogle" type="button">Connecter un compte Google</button>
+    <div class="jt-block">
+      <label class="vault-check"><input id="bJobteaser" type="checkbox"><span>Collecter les offres <b>JobTeaser</b>
+        (réservées aux étudiants), lues dans le navigateur de JobRadar</span></label>
+      <p class="muted small">Connecte-toi une fois par ton école : la session est conservée. Si l'école demande un
+        identifiant, enregistre-le ci-dessous pour son domaine (page de connexion de l'école) : JobRadar se reconnectera
+        seul ; avec une double authentification, il te préviendra simplement. La collecte JobTeaser ne tourne que
+        lorsque JobRadar est ouvert (pas pendant la mise à jour programmée sans écran).</p>
+      <button class="btn" id="bJobteaserLogin" type="button">Me connecter à JobTeaser</button>
+    </div>
     <label class="vault-check"><input id="bGoogleAuto" type="checkbox"> Utiliser le compte Google du navigateur de JobRadar
       pour les « Continuer avec Google » des sites de candidature</label>
     <p class="muted small">Ton profil habituel ne peut pas être piloté (protection des navigateurs) : JobRadar utilise un profil à part. Connecte-toi une fois à tes comptes (Google, HelloWork, Workday, Welcome to the Jungle…) dans cette fenêtre. En terminal : <code>python -m jobradar.cli navigateur</code>.</p></fieldset>
@@ -2697,6 +2718,14 @@ async function loadBrowserSettings() {
   render(s.accounts);
   $("#bSave").onclick = async () => { await api("/api/settings/browser", {method:"PUT", body:{engine:$("#bEngine").value, executable:$("#bExecutable").value, cdp_port:Number($("#bPort").value), human_wait_minutes:Number($("#bWait").value), auto_accounts:$("#bAccounts").checked, google_sign_in:$("#bGoogleAuto").checked}}); toast("Navigateur enregistré"); };
   $("#bGoogle").onclick = () => window.JobRadarGoogle?.open();
+  api("/api/sources/jobteaser").then(source => ($("#bJobteaser").checked = source.enabled)).catch(() => {});
+  $("#bJobteaser").onchange = async event => {
+    try {
+      await api("/api/sources/jobteaser", { method: "PUT", body: { enabled: event.target.checked } });
+      toast(event.target.checked ? "JobTeaser activé pour les prochains scans" : "JobTeaser désactivé");
+    } catch (error) { toast(error.message, 5000); event.target.checked = !event.target.checked; }
+  };
+  $("#bJobteaserLogin").onclick = openJobteaserLogin;
   $("#bOpen").onclick = async () => {
     const b = $("#bOpen"); b.disabled = true;
     try { const r = await api("/api/settings/browser/open", {method:"POST"}); toast(`${r.name} ouvert : connecte-toi à tes comptes.`); }

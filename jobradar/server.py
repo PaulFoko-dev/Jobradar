@@ -1408,6 +1408,36 @@ def open_browser_on_google():
     return {"ok": True, "name": browser["name"]}
 
 
+class SourceToggleIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool
+
+
+@app.get("/api/sources/jobteaser")
+def jobteaser_source():
+    return {"enabled": bool(load_config().get("sources", {}).get("jobteaser"))}
+
+
+@app.put("/api/sources/jobteaser")
+def put_jobteaser_source(body: SourceToggleIn):
+    sources = dict(load_config().get("sources") or {})
+    sources["jobteaser"] = body.enabled
+    config.save_config_section("sources", sources)
+    return {"enabled": body.enabled}
+
+
+@app.post("/api/settings/browser/jobteaser")
+def open_browser_on_jobteaser():
+    """Ouvre le navigateur de JobRadar sur JobTeaser : connecte-toi une fois par ton école, la session est gardée."""
+    from . import application_browser
+    from .sources import jobteaser
+    try:
+        browser = application_browser.open_system_browser(url=jobteaser.LOGIN)
+    except application_browser.BrowserUnavailable as exc:
+        raise HTTPException(409, str(exc))
+    return {"ok": True, "name": browser["name"]}
+
+
 @app.post("/api/settings/logins")
 def put_login(body: LoginIn):
     return login_credentials.store(body.domain, body.username, body.password)

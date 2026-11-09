@@ -4,7 +4,18 @@ Une offre normalisée contient : title, company, location, contract, date_posted
 description (texte brut), url, source ; et facultativement published_at, l'instant de publication brut
 de la source (retenu seulement s'il porte un fuseau horaire : aucun fuseau n'est jamais deviné).
 """
-from . import arbeitnow, ats, francetravail, groups, hellowork, jobspy_src, labonnealternance, remoteok, wttj
+from . import (
+    arbeitnow,
+    ats,
+    francetravail,
+    groups,
+    hellowork,
+    jobspy_src,
+    jobteaser,
+    labonnealternance,
+    remoteok,
+    wttj,
+)
 
 SOURCES = {
     "indeed": lambda *a: jobspy_src.collect("indeed", *a),
@@ -17,4 +28,6 @@ SOURCES = {
     "remoteok": remoteok.collect,
     "ats": ats.collect,
     "grands_groupes": groups.collect,
+    # Navigateur de JobRadar (connexion par l'école) : désactivée par défaut, activable dans les Réglages.
+    "jobteaser": jobteaser.collect,
 }

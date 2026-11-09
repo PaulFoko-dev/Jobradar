@@ -104,6 +104,8 @@ DEFAULT_CONFIG = {
         "ats": True,
         # Catalogue de grands groupes (Thales, Airbus, Accenture, Alten…) : voir sources/groups.py.
         "grands_groupes": True,
+        # Offres étudiantes JobTeaser, lues dans le navigateur de JobRadar après connexion par ton école.
+        "jobteaser": False,
     },
     # Identifiants API France Travail (gratuits sur https://francetravail.io).
     "francetravail": {"client_id": "", "client_secret": ""},
