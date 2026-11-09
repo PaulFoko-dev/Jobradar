@@ -92,16 +92,51 @@ def system_browser(playwright=None) -> dict:
                              "indique son exécutable dans les Réglages.")
 
 
-def _start_browser(browser: dict, port: int) -> None:
+BROWSER_START_TIMEOUT_S = 30
+
+
+def _stale_profile_lock(profile: Path) -> bool:
+    """Verrou Chromium (« SingletonLock » -> « hôte-pid ») laissé par un arrêt brutal : supprimé s'il est orphelin."""
+    lock = profile / "SingletonLock"
+    try:
+        target = os.readlink(lock)
+    except OSError:
+        return False
+    pid = target.rsplit("-", 1)[-1]
+    if not pid.isdigit():
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return False  # processus vivant : ce n'est pas un verrou orphelin
+    except ProcessLookupError:
+        pass
+    except OSError:
+        return False
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try:
+            (profile / name).unlink()
+        except OSError:
+            pass
+    return True
+
+
+def _start_browser(browser: dict, port: int, *, retried: bool = False) -> None:
     profile = config.system_profile_dir(browser["key"])
     profile.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen([browser["path"], f"--remote-debugging-port={port}", f"--user-data-dir={profile}",
-                      "--no-first-run", "--no-default-browser-check"],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    deadline = time.monotonic() + 15
+    process = subprocess.Popen([browser["path"], f"--remote-debugging-port={port}", f"--user-data-dir={profile}",
+                                "--no-first-run", "--no-default-browser-check"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    deadline = time.monotonic() + BROWSER_START_TIMEOUT_S
     while time.monotonic() < deadline:
         if _port_open(port):
             return
+        if process.poll() is not None and time.monotonic() > deadline - BROWSER_START_TIMEOUT_S + 3:
+            # Le processus a passé la main à une fenêtre déjà ouverte sur ce profil, sans port de pilotage.
+            if not retried and _stale_profile_lock(profile):
+                return _start_browser(browser, port, retried=True)
+            raise BrowserUnavailable(
+                f"Une fenêtre {browser['name']} (profil JobRadar) est déjà ouverte sans port de pilotage : "
+                "ferme-la pour que JobRadar puisse la reprendre.")
         time.sleep(.2)
     raise BrowserUnavailable(f"{browser['name']} n'a pas ouvert son port de connexion dans le délai imparti.")
 
@@ -160,7 +195,20 @@ def _browser_context(playwright):
         finally:
             _close_quietly(context)
         return
-    port = open_system_browser(playwright)["port"]
+    try:
+        port = open_system_browser(playwright)["port"]
+    except BrowserUnavailable as exc:
+        # Navigateur du système indisponible : le Chromium intégré prend le relais pour cette candidature,
+        # plutôt qu'une série de reprises différées (les sessions déjà ouvertes du profil système manquent alors).
+        LOGGER.warning("Navigateur du système indisponible, repli sur le Chromium intégré : %s", exc)
+        context = playwright.chromium.launch_persistent_context(
+            config.browser_profile_dir(), headless=False, accept_downloads=False,
+            permissions=[], service_workers="block", viewport={"width": 1365, "height": 900})
+        try:
+            yield context
+        finally:
+            _close_quietly(context)
+        return
     _unfreeze_tabs(port)
     browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
     context = browser.contexts[0] if browser.contexts else browser.new_context()
