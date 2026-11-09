@@ -76,7 +76,7 @@ SEARCH_COMBO = """<!doctype html><html lang="fr"><body><form action="/envoi" met
 <label for="email">E-mail *</label><input id="email" name="email" type="email" required>
 <label for="cv">CV *</label><input id="cv" name="cv" type="file" required>
 <label for="src">How Did You Hear About Us? *</label>
-<div><input id="src" role="combobox" aria-expanded="false" placeholder="Search" autocomplete="off" required>
+<div><input id="src" role="combobox" aria-expanded="false" placeholder="Search" autocomplete="off" aria-required="true">
 <ul id="opts" role="listbox" hidden><li role="option">Job Board</li><li role="option">LinkedIn</li>
 <li role="option">Referral</li></ul></div><span id="chosen">0 items selected</span>
 <button type="submit">Envoyer ma candidature</button></form>
@@ -162,9 +162,19 @@ def test_bench_societe_generale_attachments_then_send(client, bench, supervised_
     assert saved["status"] == "submitted", saved["intervention"]
 
 
-@pytest.mark.xfail(reason="lot 4 : listes à recherche maison (combobox Workday « How did you hear ») non gérées",
-                   strict=False)
 def test_bench_search_combobox_is_filled_locally(client, bench, supervised_browser, monkeypatch) -> None:  # noqa: F811
     monkeypatch.setattr(application_browser.application_supervisor, "mode", lambda: "off")
     saved = _run(client, bench, "/combo")
     assert saved["status"] == "submitted", saved["intervention"]
+
+
+@pytest.mark.parametrize(("value", "options", "expected"), [
+    ("LinkedIn", ["Job Board", "LinkedIn", "Referral"], "LinkedIn"),
+    ("linkedin", ["LinkedIn Jobs", "LinkedIn Ads"], "LinkedIn Ads"),
+    ("Paris", ["Paris 15e Arrondissement", "Paris", "Parisot"], "Paris"),
+    ("France", ["Afrique du Sud", "Île-de-France"], None),
+    ("Lyon", ["Marseille"], None),
+])
+def test_bench_search_list_option_choice(value, options, expected) -> None:
+    assert application_browser.best_option(value, options) == expected
+

@@ -361,6 +361,63 @@ def _settle(page) -> None:
 FILL_ORDER = {"select": 0, "listbox": 0, "radio": 1}  # une liste (pays…) peut reconstruire ou vider les champs suivants
 
 
+COMBOBOX_JS = """el => el.getAttribute('role') === 'combobox'
+  || ['list', 'both'].includes(el.getAttribute('aria-autocomplete'))
+  || el.getAttribute('aria-haspopup') === 'listbox'"""
+VISIBLE_OPTIONS_JS = """el => {
+  const id = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+  const scope = (id && document.getElementById(id)) || document;
+  return [...scope.querySelectorAll('[role=option]')]
+    .filter(option => option.getClientRects().length > 0)
+    .map(option => option.innerText.trim()).filter(Boolean).slice(0, 200);
+}"""
+CHOSEN_SHOWN_JS = """(el, chosen) => { let node = el;
+  for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
+    if ((node.innerText || '').includes(chosen)) return true; }
+  return (el.value || '').includes(chosen); }"""
+
+
+def _is_combobox(locator) -> bool:
+    try:
+        return bool(locator.evaluate(COMBOBOX_JS))
+    except PlaywrightError:
+        return False
+
+
+def best_option(value: str, options: list[str]) -> str | None:
+    """Option d'une liste à recherche : identique, sinon commençant par la valeur (jamais « Île-de-France »)."""
+    wanted = application_adapters._fold(value)
+    if not wanted:
+        return None
+    folded = [(application_adapters._fold(option), option) for option in options]
+    for test in (lambda f: f == wanted, lambda f: f.startswith(wanted)):
+        found = [option for f, option in folded if test(f)]
+        if found:
+            return min(found, key=len)
+    return None
+
+
+def _choose_combobox_option(locator, value: str) -> str | None:
+    """Fait apparaître les options (saisie, sinon frappe lente) et clique celle qui correspond à la valeur."""
+    page = locator.page
+    for attempt in range(2):
+        if attempt:
+            locator.fill("")
+            locator.press_sequentially(value, delay=40)
+        deadline = time.monotonic() + 3
+        options: list[str] = []
+        while time.monotonic() < deadline and not options:
+            options = locator.evaluate(VISIBLE_OPTIONS_JS)
+            if not options:
+                page.wait_for_timeout(200)
+        chosen = best_option(value, options)
+        if chosen:
+            page.get_by_role("option", name=chosen, exact=True).first.click(timeout=5_000)
+            page.wait_for_timeout(300)
+            return chosen
+    return None
+
+
 def _fill(root, plan: dict) -> list[dict]:
     """Remplit ce qui est possible sans laisser un widget instable arrêter toute la session.
 
@@ -389,6 +446,12 @@ def _fill(root, plan: dict) -> list[dict]:
                 root.get_by_label(item["value"], exact=True).check()
             else:
                 locator.fill(item["value"])
+                if item["kind"] == "text" and _is_combobox(locator):
+                    # Liste à recherche (Workday, react-select) : taper ne suffit pas, il faut choisir l'option.
+                    chosen = _choose_combobox_option(locator, str(item["value"]))
+                    if chosen:
+                        item["chosen"] = chosen
+                        continue
                 # Quitter le champ comme une personne : le site revalide et retire son ancien message d'erreur.
                 locator.evaluate("el => el.blur()")
         except PlaywrightError:
@@ -546,6 +609,9 @@ def _verify_filled(root, plan: dict) -> list[dict]:
                 actual = root.get_by_label(str(item["value"]), exact=True).is_checked() if chosen.count() else False
             else:
                 actual = locator.input_value()
+                if actual != str(item["value"]) and item.get("chosen") and locator.evaluate(
+                        CHOSEN_SHOWN_JS, item["chosen"]):
+                    actual = str(item["value"])  # liste à recherche : l'option choisie s'affiche à côté du champ
         except PlaywrightError:
             issues.append({"label": item["label"], "reason": "champ devenu inaccessible"})
             continue
