@@ -1,6 +1,6 @@
 """Catalogue de grands groupes qui recrutent beaucoup en France, interrogés par leur API carrières publique.
 
-Chaque entrée a été vérifiée (octobre 2026) : Workday se décrit par son hôte et son site, les autres ATS par
+Chaque entrée a été vérifiée (octobre 2026, revue en novembre 2026) : Workday se décrit par son hôte et son site, les autres ATS par
 leur identifiant. Les entreprises déjà déclarées dans « companies » ne sont pas interrogées deux fois.
 Les groupes dont le site carrières n'a pas d'API ouverte (Capgemini, Orange, Société Générale…) restent
 couverts par les agrégateurs (LinkedIn, Indeed, HelloWork, Welcome to the Jungle).
@@ -40,13 +40,30 @@ GROUPS = [
     {"name": "Elastic", "ats": "greenhouse", "slug": "elastic"},
     {"name": "MongoDB", "ats": "greenhouse", "slug": "mongodb"},
     {"name": "Datadog", "ats": "greenhouse", "slug": "datadog"},
-    {"name": "Doctolib", "ats": "greenhouse", "slug": "doctolib"},
     {"name": "Mirakl", "ats": "greenhouse", "slug": "mirakl"},
     {"name": "Algolia", "ats": "greenhouse", "slug": "algolia"},
     {"name": "Dataiku", "ats": "greenhouse", "slug": "dataiku"},
+    {"name": "Aircall", "ats": "greenhouse", "slug": "aircallioinc"},
+    {"name": "Ivalua", "ats": "greenhouse", "slug": "ivalua"},
+    # Ashby
+    {"name": "Doctolib", "ats": "ashby", "slug": "doctolib"},
+    {"name": "Qonto", "ats": "ashby", "slug": "qonto"},
+    {"name": "Alan", "ats": "ashby", "slug": "alan"},
+    {"name": "Pennylane", "ats": "ashby", "slug": "pennylane"},
+    {"name": "Back Market", "ats": "ashby", "slug": "backmarket"},
+    {"name": "Ledger", "ats": "ashby", "slug": "ledger"},
+    {"name": "Alma", "ats": "ashby", "slug": "alma"},
+    {"name": "Owkin", "ats": "ashby", "slug": "owkin"},
+    {"name": "Dust", "ats": "ashby", "slug": "dust"},
+    {"name": "Photoroom", "ats": "ashby", "slug": "photoroom"},
     # Lever
     {"name": "Contentsquare", "ats": "lever", "slug": "contentsquare"},
-    {"name": "Aircall", "ats": "lever", "slug": "aircall"},
+    {"name": "Agicap", "ats": "lever", "slug": "agicap"},
+    {"name": "Brevo", "ats": "lever", "slug": "brevo"},
+    {"name": "Scaleway", "ats": "lever", "slug": "scaleway"},
+    {"name": "Doctrine", "ats": "lever", "slug": "doctrine"},
+    {"name": "360Learning", "ats": "lever", "slug": "360learning"},
+    {"name": "Heetch", "ats": "lever", "slug": "heetch"},
     {"name": "Pigment", "ats": "lever", "slug": "pigment"},
     {"name": "BlaBlaCar", "ats": "lever", "slug": "blablacar"},
     {"name": "Swile", "ats": "lever", "slug": "swile"},

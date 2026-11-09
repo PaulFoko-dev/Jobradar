@@ -1,4 +1,4 @@
-"""Pages carrières d'entreprises hébergées sur Greenhouse, Lever, SmartRecruiters ou Workday (API JSON publiques).
+"""Pages carrières d'entreprises hébergées sur Greenhouse, Lever, Ashby, SmartRecruiters ou Workday (API JSON publiques).
 
 Les entreprises à surveiller se déclarent dans data/config.json → "companies" ; la source « grands_groupes »
 ajoute le catalogue de groups.py. On récupère leurs offres (Workday : recherche par mot-clé côté serveur, faute
@@ -38,6 +38,26 @@ def _lever(client, c, _criteria):
             "published_at": datetime.fromtimestamp(ts / 1000, timezone.utc) if ts else None,
             "description": j.get("descriptionPlain") or html_to_text(j.get("description")),
             "url": j["hostedUrl"],
+        }
+
+
+def _ashby(client, c, _criteria):
+    r = client.get(f"https://api.ashbyhq.com/posting-api/job-board/{c['slug']}")
+    r.raise_for_status()
+    for j in r.json().get("jobs", []):
+        if j.get("isListed") is False:
+            continue
+        places = [j.get("location")] + [p.get("location") for p in j.get("secondaryLocations") or []]
+        if j.get("isRemote"):
+            places.append("Remote")
+        yield {
+            "title": j["title"],
+            "location": ", ".join(p for p in places if p) or None,
+            "contract": j.get("employmentType"),
+            "date_posted": (j.get("publishedAt") or "")[:10] or None,
+            "published_at": j.get("publishedAt"),
+            "description": j.get("descriptionPlain") or html_to_text(j.get("descriptionHtml")),
+            "url": j["jobUrl"],
         }
 
 
@@ -134,7 +154,8 @@ def _workday_update(client, url: str) -> dict:
     }
 
 
-FETCHERS = {"greenhouse": _greenhouse, "lever": _lever, "smartrecruiters": _smartrecruiters, "workday": _workday}
+FETCHERS = {"greenhouse": _greenhouse, "lever": _lever, "ashby": _ashby, "smartrecruiters": _smartrecruiters,
+            "workday": _workday}
 # Détail chargé seulement pour les offres retenues et inconnues ; il peut compléter le lieu, d'où le second filtre.
 DETAILS = {"smartrecruiters": _smartrecruiters_update, "workday": _workday_update}
 EARLY_CAREER = {"stage", "alternance", "professionnalisation", "vie"}

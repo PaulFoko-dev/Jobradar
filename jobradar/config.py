@@ -107,14 +107,14 @@ DEFAULT_CONFIG = {
     # Clé de lecture gratuite créée sur https://api.apprentissage.beta.gouv.fr/.
     "labonnealternance": {"api_key": ""},
     # Pages carrières d'entreprises hébergées sur un ATS avec API publique.
-    # ats : "greenhouse" | "lever" | "smartrecruiters" ; slug : identifiant de l'entreprise sur l'ATS.
+    # ats : "greenhouse" | "lever" | "ashby" | "smartrecruiters" ; slug : identifiant de l'entreprise sur l'ATS.
     # ats "workday" : host (ex. "thales.wd3.myworkdayjobs.com") et site (ex. "Careers") à la place du slug.
     "companies": [
         {"name": "Devoteam", "ats": "smartrecruiters", "slug": "Devoteam"},
         {"name": "Sopra Steria", "ats": "smartrecruiters", "slug": "SopraSteria1"},
         {"name": "Datadog", "ats": "greenhouse", "slug": "datadog"},
-        {"name": "Doctolib", "ats": "greenhouse", "slug": "doctolib"},
-        {"name": "Qonto", "ats": "lever", "slug": "qonto"},
+        {"name": "Doctolib", "ats": "ashby", "slug": "doctolib"},
+        {"name": "Qonto", "ats": "ashby", "slug": "qonto"},
     ],
 }
 
