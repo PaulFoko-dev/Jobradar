@@ -404,6 +404,24 @@ def _fill(root, plan: dict) -> list[dict]:
     return issues
 
 
+def _rule_apply_link(page, followed: set[str]) -> str | None:
+    """Lien « Postuler » repéré par les règles, absolu, jamais suivi deux fois ni vers LinkedIn/Indeed."""
+    from . import application_flow  # évite une dépendance circulaire au chargement
+
+    try:
+        link = application_adapters.find_apply_link(page.content())
+    except PlaywrightError:
+        return None
+    if not link:
+        return None
+    link = urljoin(page.url, link)
+    if link in followed or link.split("#")[0] == page.url.split("#")[0]:
+        return None
+    if application_flow.provider_for(link) in application_flow.MANUAL_ONLY_HOSTS:
+        return None
+    return link
+
+
 def _button_text(button) -> str:
     try:
         return " ".join((button.inner_text(timeout=1_000) or button.get_attribute("value") or "").split())
@@ -1698,6 +1716,7 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
     from . import application_flow  # évite une dépendance circulaire au chargement
     login_attempted = False
     stalled = loading_waited = False
+    followed: set[str] = set()
     for _ in range(application_supervisor.MAX_DECISIONS):
         if _page_says_offer_removed(page):
             supervision.journal.note("Offre clôturée détectée dans le texte visible de la page.")
@@ -1787,6 +1806,16 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
             supervision.last_hash = None
             return provider, match, page
         if not clicks:
+            # Repli sur les règles avant toute intervention : un lien « Postuler » (page relais HelloWork,
+            # agrégateur) mène souvent au formulaire de l'entreprise même quand l'IA n'a rien proposé.
+            link = _rule_apply_link(page, followed)
+            if link:
+                followed.add(link)
+                supervision.journal.decision(page, snap, decision, [f"lien « Postuler » suivi par les règles : {link}"])
+                page.goto(link, wait_until="domcontentloaded", timeout=45_000)
+                _wait_for_application_ui(page, provider)
+                supervision.last_hash = None
+                continue
             stop = next((item["reason"] for item in decision["actions"] if item["type"] == "stop"), "")
             supervision.journal.decision(page, snap, decision, [f"arrêt : {stop}" if stop else "aucune action sûre"])
             _ai_intervention(attempt, "not_application_form", decision,
