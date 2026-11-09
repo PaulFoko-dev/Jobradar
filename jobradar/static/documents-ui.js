@@ -161,12 +161,25 @@
       ${(letter.paragraphs || []).map(paragraph => `<p>${esc(paragraph)}</p>`).join("")}<p>${esc(letter.closing || "")}</p></div>`;
   }
 
+  // « Pourquoi ce contenu » : classement local des éléments du profil pour l'offre, retenus ou non.
+  function explanationHtml(rows) {
+    if (!(rows || []).length) return "";
+    const kinds = { experiences: "Expérience", projects: "Projet", certifications: "Certification" };
+    const items = rows.map(row => `<tr class="${row.kept ? "kept" : "dropped"}"><td>${esc(kinds[row.kind] || row.kind)} n°${esc(row.rank)}</td>
+      <td>${esc(row.label)}</td><td>${esc(row.score)}</td><td>${esc((row.terms || []).join(", ") || "—")}</td>
+      <td>${row.kept ? "Retenu" : "Non retenu"}</td></tr>`).join("");
+    return `<details class="doc-why"><summary>Pourquoi ce contenu ? Classement des éléments de ton profil pour cette offre</summary>
+      <table><thead><tr><th>Rang</th><th>Élément</th><th>Score</th><th>Termes de l'offre couverts</th><th>Dans le CV</th></tr></thead>
+      <tbody>${items}</tbody></table></details>`;
+  }
+
   function reviewHtml(result) {
     const hasQuestions = Object.values(result.questions || {}).some(value => value?.length);
     return `<section class="doc-workflow" aria-labelledby="doc-review-title"><div data-doc-error aria-live="assertive"></div>
       <div class="doc-heading"><h3 id="doc-review-title">Proposition adaptée</h3>
         <button class="btn ghost sm" type="button" data-review-close title="La proposition ne sera plus proposée à la réouverture">Abandonner la proposition</button></div>
       ${(result.notes || []).length ? `<div class="doc-notes"><b>Contrôles appliqués</b><ul>${result.notes.map(note => `<li>${esc(note)}</li>`).join("")}</ul></div>` : ""}
+      ${explanationHtml(result.explanation)}
       ${questionsHtml(result.questions)}
       <div class="doc-review-grid">${compositionHtml(result.composition)}${letterHtml(result.letter)}</div>
       <details><summary>Différences et données structurées</summary><pre>${esc(JSON.stringify({ composition: result.composition, letter: result.letter }, null, 2))}</pre></details>

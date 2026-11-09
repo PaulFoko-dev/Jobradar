@@ -78,3 +78,10 @@
   .doc-questions .doc-question-step { min-height: 0; padding: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .doc-workflow *, .document-card * { scroll-behavior: auto !important; } }
+.doc-why { margin: 12px 0; }
+.doc-why summary { cursor: pointer; font-weight: 600; }
+.doc-why table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: .9em; }
+.doc-why th, .doc-why td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.doc-why tr.dropped td { color: var(--muted); }
+.doc-why tr.kept td:last-child { color: var(--good); font-weight: 600; }
+@media (max-width: 760px) { .doc-why table, .doc-why tbody, .doc-why tr, .doc-why td { display: block; } .doc-why thead { display: none; } }
