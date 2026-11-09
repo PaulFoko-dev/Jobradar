@@ -56,8 +56,8 @@ ton abonnement. Pas de clé API, pas de serveur distant : tes recherches et tes 
 | ↩️ **Relances guidées** | Rappel 10 jours après l'envoi, brouillon de relance rédigé par l'IA (objet et message modifiables, copie, ouverture dans ta messagerie), report ou désactivation |
 | 📅 **Entretiens** | Planification dans la fiche de candidature, export vers ton agenda (`.ics`) avec rappel la veille, annulation exportable |
 | 🔔 **Notifications** | Offres notées 85 ou plus, relances à faire, entretiens à venir : dans JobRadar et sur le bureau |
-| 🗄️ **Archive de chaque candidature** | Un dossier par candidature dans `candidatures/`, lisible sans JobRadar : copie PDF de la page de l'offre (texte complet vérifié), capture d'écran nette (résolution doublée), texte et analyse de l'offre, entretiens. Consultable même si l'annonce est retirée |
-| 📦 **Sauvegarde et export** | Sauvegarde ZIP en un clic (base, réglages, archives ; sans mot de passe), export du suivi en CSV pour Excel, badge « Annonce retirée » |
+| 🗄️ **Archive de chaque candidature** | Un dossier par candidature dans `candidatures/`, chiffré dès que le coffre est actif et consultable depuis JobRadar : copie PDF de la page de l'offre (texte complet vérifié), capture d'écran nette (résolution doublée), texte et analyse de l'offre, entretiens. Consultable même si l'annonce est retirée |
+| 📦 **Sauvegarde et export** | Sauvegarde ZIP en un clic (base, réglages, profil, archives ; contenu privé chiffré), restauration sur un autre ordinateur avec ta clé de récupération, export du suivi en CSV pour Excel, badge « Annonce retirée » |
 | ✉️ **Alertes par e-mail** | En option, un seul e-mail récapitulatif par actualisation sur ta propre adresse, envoyé depuis ton compte (TLS obligatoire, mot de passe dans le trousseau du système) |
 | ⏰ **Mise à jour quotidienne** | systemd (Linux) ou Planificateur de tâches (Windows), rattrapée au démarrage si le PC était éteint |
 | 🛟 **Résistant aux quotas** | Si ton quota IA est épuisé, les offres non analysées restent en attente et sont reprises le lendemain |
@@ -335,8 +335,14 @@ flowchart LR
 
 ## 🔒 Confidentialité et usage responsable
 
-- Tout reste sur ton PC : la base `data/jobradar.db` contient tes recherches, les offres et tes
-  candidatures. Seul le texte des offres et tes critères sont envoyés à l'assistant IA que tu as choisi.
+- Tout reste sur ton PC. Au premier lancement, JobRadar propose d'activer son **coffre chiffré** (AES-256) : profil,
+  CV, lettres, archives des candidatures, captures du robot et données privées de la base sont alors chiffrés sur le
+  disque. Une **clé de récupération**, affichée une seule fois, est le seul moyen de retrouver tes données sur un
+  autre ordinateur (`python -m jobradar.cli restaurer sauvegarde.zip`, puis la clé dans JobRadar). Détails et limites :
+  [docs/securite.md](docs/securite.md).
+- L'assistant IA ne reçoit jamais ton identité, tes coordonnées, tes réponses types ni tes identifiants : seulement
+  le texte des offres, tes critères et, avec ton consentement, le contenu professionnel de ton CV
+  ([docs/ia-contrat.md](docs/ia-contrat.md)).
 - Indeed et LinkedIn interdisent la collecte automatisée dans leurs conditions d'utilisation. JobRadar
   consulte leurs pages publiques **sans connexion**, à faible volume et avec des pauses, pour un **usage
   personnel**. Un blocage temporaire reste possible ; les autres sources continuent alors de fonctionner.

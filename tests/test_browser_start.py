@@ -1,8 +1,11 @@
 import os
+import sys
 
 import pytest
 
 from jobradar import application_browser
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="verrou de profil et /bin/true propres à Unix")
 
 
 def test_orphan_profile_lock_is_removed_but_a_live_one_is_kept(tmp_path) -> None:

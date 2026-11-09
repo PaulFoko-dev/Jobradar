@@ -81,7 +81,8 @@ def test_seal_tree_encrypts_browser_files_and_plain_copies_are_removed(vault_on)
     with private_io.plain_copies({"cv": str(proof / "cv.pdf")}) as copies:
         copy = Path(copies["cv"])
         assert copy.name == "cv.pdf" and copy.read_bytes() == b"%PDF Zorglub"
-        assert oct(copy.parent.stat().st_mode & 0o777) == "0o700"
+        if os.name != "nt":  # droits POSIX : sans objet sous Windows
+            assert oct(copy.parent.stat().st_mode & 0o777) == "0o700"
     assert not copy.exists() and not copy.parent.exists()
 
 
