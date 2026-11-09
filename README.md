@@ -42,25 +42,29 @@ ton abonnement. Pas de clé API, pas de serveur distant : tes recherches et tes 
 | | |
 |---|---|
 | 🧠 **Analyse des critères par IA** | Formulaire et/ou langage naturel, puis requêtes, mots-clés et exclusions, modifiables avant lancement |
-| 🌐 **Multi-sources** | Indeed · LinkedIn · Welcome to the Jungle · HelloWork · JobTeaser (connexion école) · La Bonne Alternance · Arbeitnow · Remote OK · France Travail · pages carrières (Greenhouse, Lever, SmartRecruiters, Workday) · catalogue de grands groupes (Thales, Airbus, Accenture, Alten, Sanofi…) |
-| 🧹 **Filtrage et dédoublonnage** | Offres hors domaine ou d'un autre type de contrat écartées avant l'IA ; une même offre publiée sur plusieurs sites n'apparaît qu'une fois, avec tous ses liens |
+| 🌐 **Multi-sources** | Indeed · LinkedIn · Welcome to the Jungle · HelloWork · JobTeaser (connexion école) · La Bonne Alternance · Arbeitnow · Remote OK · France Travail · pages carrières (Greenhouse, Lever, Ashby, SmartRecruiters, Workday) · catalogue de grands groupes (Thales, Airbus, Accenture, Alten, Sanofi…) |
+| 🧹 **Filtrage et dédoublonnage** | Offres hors domaine ou d'un autre type de contrat écartées avant l'IA ; une même offre publiée sur plusieurs sites, ou menant au même formulaire, n'apparaît qu'une fois, avec tous ses liens ; une candidature équivalente à une candidature déjà envoyée est bloquée avant l'envoi |
 | 📊 **Score de pertinence expliqué** | Points forts et points faibles, résumé, missions, profil, points d'attention |
 | 📝 **Aide au CV** | Mots-clés exacts de l'offre à reprendre (copiables) et conseils d'adaptation |
+| 👤 **Profil candidat** | Import du CV, réponses types datées qui expirent selon leur nature, versions réversibles, « Renforcer mon profil » (points faibles, compétences sans preuve), avatar métier |
+| 📄 **CV et lettre adaptés** | Éléments du profil classés localement selon l'offre, puces reformulées sans invention et rattachées à leur preuve (« Pourquoi ce contenu »), contrôle ATS, DOCX d'origine conservé ou modèle JobRadar |
 | 🚀 **Candidature contrôlée** | Choix des CV et lettres, amélioration d'une version par consigne libre avec nouvel aperçu, panneau manuel ou remplissage assisté sur Greenhouse, Lever, SmartRecruiters, Workday et formulaires génériques ; LinkedIn et Indeed restent manuels |
-| 🤖 **Auto-candidature (optionnelle)** | Par recherche : au-dessus d'un score choisi, CV et lettre préparés, contrôlés (ATS ≥ 95 %) puis envoyés automatiquement, avec un plafond quotidien ; Indeed et LinkedIn en préparation seule |
+| 🤖 **Auto-candidature (optionnelle)** | Par recherche, depuis la page « Candidatures auto » : au-dessus d'un score choisi, CV et lettre préparés, contrôlés (ATS ≥ 95 %) puis envoyés automatiquement, avec un plafond quotidien ; Indeed et LinkedIn en préparation seule |
 | 📍 **Zone stricte ou souple** | En mode souple, une offre hors zone reste visible si son score est élevé |
-| 🗂️ **Suivi des candidatures** | Kanban par glisser-déposer, vue liste, notes, historique daté, taux de réponse |
+| 🗂️ **Suivi des candidatures** | Kanban par glisser-déposer, vue liste, notes, historique daté, taux de réponse et résultats par source, plateforme, tranche de score, CV de base, modèle ou mode d'envoi, mesures du robot de candidature |
+| 📬 **Boîte de réception (optionnelle)** | Lue en local et sans rien marquer comme lu : réponses des recruteurs repérées et nouveau statut proposé, codes et liens de vérification des sites saisis par le robot ; rien n'est envoyé à l'IA |
 | 🔁 **Confirmation automatique** | Quand tu reviens sur JobRadar après avoir ouvert une offre, il te demande si tu as postulé |
 | ⏳ **Date limite et priorité** | Date limite de candidature extraite par l'IA (« Clôture aujourd'hui », « Bientôt close »), badge « Nouvelle », tri « À faire en priorité » |
 | ⭐ **Règles par entreprise** | Entreprises favorites mises en avant ; entreprises exclues masquées et plus envoyées à l'IA ; alerte « Tu as déjà postulé chez X » |
 | ↩️ **Relances guidées** | Rappel 10 jours après l'envoi, brouillon de relance rédigé par l'IA (objet et message modifiables, copie, ouverture dans ta messagerie), report ou désactivation |
-| 📅 **Entretiens** | Planification dans la fiche de candidature, export vers ton agenda (`.ics`) avec rappel la veille, annulation exportable |
+| 📅 **Entretiens** | Planification dans la fiche de candidature, export vers ton agenda (`.ics`) avec rappel la veille, annulation exportable, fiche de préparation et simulation question par question |
 | 🔔 **Notifications** | Offres notées 85 ou plus, relances à faire, entretiens à venir : dans JobRadar et sur le bureau |
 | 🗄️ **Archive de chaque candidature** | Un dossier par candidature dans `candidatures/`, chiffré dès que le coffre est actif et consultable depuis JobRadar : copie PDF de la page de l'offre (texte complet vérifié), capture d'écran nette (résolution doublée), texte et analyse de l'offre, entretiens. Consultable même si l'annonce est retirée |
 | 📦 **Sauvegarde et export** | Sauvegarde ZIP en un clic (base, réglages, profil, archives ; contenu privé chiffré), restauration sur un autre ordinateur avec ta clé de récupération, export du suivi en CSV pour Excel, badge « Annonce retirée » |
 | ✉️ **Alertes par e-mail** | En option, un seul e-mail récapitulatif par actualisation sur ta propre adresse, envoyé depuis ton compte (TLS obligatoire, mot de passe dans le trousseau du système) |
 | ⏰ **Mise à jour quotidienne** | systemd (Linux) ou Planificateur de tâches (Windows), rattrapée au démarrage si le PC était éteint |
 | 🛟 **Résistant aux quotas** | Si ton quota IA est épuisé, les offres non analysées restent en attente et sont reprises le lendemain |
+| 🔐 **Coffre chiffré et connexion locale** | Données privées chiffrées sur le disque (AES-256-GCM) avec clé de récupération ; accès à l'interface protégé par identifiant et mot de passe |
 | 🌗 **Thème clair / sombre** | Interface responsive, utilisable aussi sur mobile, aux couleurs de JobRadar (Work Sans, bleu nuit, bleu radar, cyan, vert menthe) |
 
 <table>
@@ -74,11 +78,11 @@ ton abonnement. Pas de clé API, pas de serveur distant : tes recherches et tes 
 </tr>
 <tr>
 <td width="50%"><img src="docs/screenshots/suivi.png" alt="Suivi des candidatures"></td>
-<td width="50%"><img src="docs/screenshots/sombre.png" alt="Thème sombre"></td>
+<td width="50%"><img src="docs/screenshots/sombre.png" alt="Écran Aujourd'hui en thème sombre"></td>
 </tr>
 <tr>
 <td align="center"><em>Suivi des candidatures en Kanban</em></td>
-<td align="center"><em>Thème sombre</em></td>
+<td align="center"><em>Écran « Aujourd'hui » en thème sombre</em></td>
 </tr>
 </table>
 
@@ -144,9 +148,13 @@ dans `"models"` ; une chaîne vide utilise le modèle par défaut de l'assistant
 
 Au premier lancement, JobRadar propose de **créer ton compte local** (identifiant et mot de passe, qui protègent l'accès
 à l'application sur cet ordinateur), puis lance une **visite guidée** qui te montre chaque partie de l'interface. Elle se
-rouvre à tout moment avec le bouton **Guide** ou depuis le menu de ton compte (avatar en haut à droite : profil,
-réglages, connexion Google, mot de passe, déconnexion). L'écran **Aujourd'hui** regroupe ensuite chaque jour ce qui
-demande ton attention.
+rouvre à tout moment avec le bouton **?** de la barre du haut ou depuis le menu de ton compte (avatar en haut à droite :
+profil, réglages, connexion Google, guide, mot de passe, déconnexion). L'écran **Aujourd'hui** regroupe ensuite chaque
+jour ce qui demande ton attention.
+
+Commence par **Mon profil** (barre latérale) : importe ton CV et complète les informations souvent demandées. Dans
+« Identité et présentation », **Choisir un avatar** ouvre une galerie d'avatars par métier (cybersécurité, data,
+développement, infrastructure, produit) ; l'avatar choisi remplace tes initiales en haut à droite.
 
 > 💡 Connecte un compte Google dans le navigateur de JobRadar (Réglages → Candidatures → « Connecter un compte
 > Google ») : quand un site propose « Continuer avec Google », le robot s'en sert pour se connecter à ta place.
@@ -174,13 +182,17 @@ La préparation du CV et de la lettre tourne sur le serveur : tu peux fermer la 
 réouverture de la candidature (onglet Documents). Une préparation interrompue par un arrêt de JobRadar repart au
 démarrage suivant.
 
-Sur la page d'une recherche, l'interrupteur **Auto-candidature** (désactivé par défaut, confirmation demandée) confie
-à JobRadar chaque offre notée au-dessus du **score minimal** choisi, dans la limite d'un **plafond quotidien** :
+La page **Candidatures auto** (barre latérale) a un interrupteur par recherche (désactivé par défaut, confirmation
+demandée). Il confie à JobRadar chaque offre notée au-dessus du **score minimal** choisi, dans la limite d'un
+**plafond quotidien**. La page d'une recherche affiche l'état de son auto-candidature et un lien vers ce réglage :
 
 1. l'offre est ajoutée au suivi, puis CV et lettre sont préparés avec tes bases et modèles par défaut, sans question ;
 2. les documents sont générés ; la chaîne s'arrête si le contrôle ATS est sous 95 % ou si un document est périmé ;
 3. la candidature part en **envoi assisté sans relecture** (ta préférence de relecture habituelle n'est pas modifiée).
    Pour Indeed, LinkedIn et les formulaires non pris en charge, JobRadar s'arrête aux documents prêts et te prévient.
+
+La même page liste les candidatures automatiques récentes (recherche par texte, filtre par état) ; **Tout reprendre**
+relance celles qui se sont arrêtées.
 
 Les champs de motivation et les questions factuelles peuvent être complétés par l'IA uniquement à partir du profil ;
 au moindre doute ou fait non justifié, JobRadar s'arrête avant l'envoi. Dans **Réglages → Candidatures**, le mode
@@ -197,7 +209,21 @@ python -m jobradar.cli navigateur
 Des identifiants par domaine peuvent aussi être enregistrés dans cette section. Un identifiant n'est rempli que sur
 le domaine enregistré ou l'un de ses sous-domaines : enregistré pour `acme.wd3.myworkdayjobs.com`, il n'est jamais
 proposé à un autre client Workday. Les mots de passe restent dans le trousseau système (ou dans `data/secrets.json` protégé en 0600) et ne sont jamais affichés. Les captchas ne sont pas
-contournés. Toute difficulté (IA, validation, formulaire ambigu) arrête la chaîne et crée une notification. Une panne
+contournés. La même section règle aussi :
+
+- **l'attente d'une étape à faire toi-même** (connexion, création de compte, captcha, code reçu par e-mail) : 10 minutes
+  par défaut, de 1 à 60. JobRadar reprend seul dès que c'est fait, sinon il met la candidature de côté et passe à la suivante ;
+- **la création automatique des comptes** demandés par certains sites (Workday…), désactivée par défaut : ton e-mail, un
+  mot de passe fort généré et rangé pour ce seul domaine, les conditions du compte acceptées (jamais une newsletter) ;
+- **« Continuer avec Google »**, activé par défaut : le compte Google connecté dans le navigateur de JobRadar est utilisé
+  quand un site le propose.
+
+Si la lecture de la boîte de réception est activée (voir plus bas), un code ou un lien de vérification envoyé par le
+site est saisi ou ouvert par le robot. Après un remplissage réussi, JobRadar retient pour chaque site quel champ
+correspond à quelle information du profil (sans les valeurs) : à la visite suivante, ces champs sont remplis sans appel
+à l'IA.
+
+Toute difficulté (IA, validation, formulaire ambigu) arrête la chaîne et crée une notification. Une panne
 du navigateur avant le clic d'envoi donne lieu à une unique reprise différée ; après le clic, aucune reprise automatique
 n'est possible afin d'éviter un doublon. Une offre n'est jamais confiée deux fois. Avec la mise à jour
 quotidienne sans serveur démarré, les documents sont préparés pendant `refresh` et l'envoi part au prochain
@@ -276,12 +302,30 @@ la piste à suivre.
   tentatives au plus. La recherche, elle, se termine normalement. Un e-mail de test au plus toutes les 10 s.
 - Une alerte déjà lue ou ignorée dans JobRadar n'est pas envoyée par e-mail.
 
+### Boîte de réception
+
+Désactivée par défaut. Dans **Réglages → Alertes par e-mail**, section « Boîte de réception », coche « Lire ma boîte de
+réception (en local) » : le choix est enregistré aussitôt. JobRadar utilise le même compte que les alertes par e-mail :
+configure-le d'abord. Le serveur IMAP est déduit du serveur
+d'envoi (`smtp.gmail.com` → `imap.gmail.com`) ; sinon, indique-le dans `inbox.imap_host` de `data/config.json`.
+
+- La boîte est lue à chaque mise à jour quotidienne et avec le bouton **Vérifier ma boîte maintenant** : messages des
+  30 derniers jours par défaut (200 au plus), en SSL et en lecture seule. Aucun message n'est marqué comme lu, déplacé
+  ni supprimé.
+- Chaque message est rapproché d'une candidature envoyée (nom ou domaine de l'entreprise), puis classé par règles :
+  accusé de réception, refus ou entretien. Le statut n'est jamais changé seul : une notification te le **propose**.
+  Seule exception : un accusé de réception confirme une candidature dont l'envoi n'avait pas été reconnu.
+- Pendant une candidature, le robot y cherche le code ou le lien de vérification envoyé par le site.
+- Le contenu des messages n'est jamais envoyé à l'IA.
+
 ## ⚙️ Configuration (`data/config.json`)
 
 | Clé | Rôle | Défaut |
 |---|---|---|
 | `ai_provider` | `"claude"` ou `"codex"` | `"claude"` |
-| `models` | Modèle par assistant et par tâche (`criteria`, `scoring`) | sonnet / défaut Codex |
+| `claude_bin` · `codex_bin` | Commande ou chemin complet de chaque assistant | `"claude"` · `"codex"` |
+| `ai_timeout_s` | Délai maximal d'un appel à l'IA, en secondes | 600 |
+| `models` | Modèle par assistant et par tâche (`criteria`, `scoring`, `follow_up`, `profile`, `tailoring`, `project`, `interview`) | sonnet / défaut Codex |
 | `scoring_batch_size` · `scoring_parallel` | Offres par appel IA · appels simultanés | 4 · 3 |
 | `archive_dir` | Dossier des archives de candidatures (vide = `candidatures/` dans le projet). Un dossier synchronisé (OneDrive, Nextcloud…) en fait une sauvegarde automatique | `""` |
 | `timezone` | Fuseau horaire utilisé pour les dates limites, relances et entretiens | `"Europe/Paris"` |
@@ -290,12 +334,14 @@ la piste à suivre.
 | `alerts` | `min_score` : score à partir duquel une offre est signalée ; `desktop` : notifications de bureau | 85 · `true` |
 | `application` | Préférences du parcours de candidature : `mode`, lettre incluse et validation avant envoi (`first_five`, `always` ou `never`) | manuel · lettre incluse · `first_five` |
 | `email` | Alertes par e-mail (modifiables dans **Réglages**) : `enabled`, `to`, `from` (vide = identifiant), `smtp_host`, `smtp_port`, `security` (`"starttls"` ou `"ssl"`), `username`, `kinds` (types d'alerte envoyés). Jamais de mot de passe ici | désactivé · 587 · `"starttls"` · les 3 types |
+| `inbox` | Lecture de la boîte de réception (modifiable dans **Réglages**) : `enabled`, `imap_host` (vide = déduit du serveur d'envoi), `days` (messages lus) | désactivé · `""` · 30 |
+| `browser` | Navigateur des candidatures, réglable dans **Réglages → Candidatures** sauf `ai_supervision` : `engine` (`"system"` ou `"chromium"`), `executable`, `cdp_port`, `human_wait_minutes`, `auto_accounts`, `google_sign_in`, `ai_supervision` (`"always"`, `"fallback"` ou `"off"`) | navigateur du système · 9333 · 10 min · comptes manuels · Google activé · `"always"` |
 | `max_offers_scored_per_run` | Plafond d'offres analysées par exécution (préserve ton quota) | 150 |
 | `results_per_query` | Résultats demandés par requête et par site | 25 |
-| `sources` | Active ou désactive chaque source | toutes sauf France Travail et La Bonne Alternance |
+| `sources` | Active ou désactive chaque source | toutes sauf France Travail, La Bonne Alternance et JobTeaser |
 | `francetravail` | `client_id` / `client_secret` gratuits sur [francetravail.io](https://francetravail.io) (API « Offres d'emploi v2 ») | vide |
 | `labonnealternance` | `api_key` de lecture créée sur [l'espace développeurs officiel](https://api.apprentissage.beta.gouv.fr/) | vide |
-| `companies` | Entreprises à surveiller directement : `{"name", "ats", "slug", "logo"}` (Workday : `host` et `site` à la place de `slug`) | 5 exemples |
+| `companies` | Entreprises à surveiller directement : `{"name", "ats", "slug", "logo"}`, avec `ats` parmi `greenhouse`, `lever`, `ashby`, `smartrecruiters` et `workday` (Workday : `host` et `site` à la place de `slug`) | 5 exemples |
 
 **Grands groupes** : la source `grands_groupes` interroge une quarantaine de groupes qui recrutent beaucoup en France
 (Thales, Airbus, Accenture, Sanofi, Air Liquide, Valeo, Michelin, Stellantis, Alten, Assystem, Sopra Steria…), listés
@@ -307,8 +353,9 @@ restent couverts par LinkedIn, Indeed, HelloWork et Welcome to the Jungle. Compt
 
 | URL de la page carrières | `ats` | `slug` |
 |---|---|---|
-| `boards.greenhouse.io/doctolib` | `greenhouse` | `doctolib` |
-| `jobs.lever.co/qonto` | `lever` | `qonto` |
+| `boards.greenhouse.io/datadog` | `greenhouse` | `datadog` |
+| `jobs.lever.co/<entreprise>` | `lever` | `<entreprise>` |
+| `jobs.ashbyhq.com/doctolib` | `ashby` | `doctolib` |
 | `jobs.smartrecruiters.com/Devoteam` | `smartrecruiters` | `Devoteam` |
 | `thales.wd3.myworkdayjobs.com/Careers` | `workday` | `"host": "thales.wd3.myworkdayjobs.com", "site": "Careers"` |
 
@@ -340,7 +387,9 @@ flowchart LR
   de quota épuisé, de délai dépassé ou d'erreur, elle reste « en attente » et sera reprise à l'exécution
   suivante. Le bouton **analyser maintenant** permet aussi de relancer l'analyse sans refaire la collecte.
 - **Sécurité** : l'assistant IA est lancé sans aucun outil (Claude Code `--tools ""`, Codex en bac à sable
-  lecture seule). Il lit seulement le texte des offres et répond en JSON.
+  lecture seule). Il ne reçoit que du texte (offres, critères, formulaires assainis et, avec ton consentement, le
+  contenu professionnel de ton CV) et répond en JSON ; les actions qu'il propose sont vérifiées localement
+  ([docs/ia-contrat.md](docs/ia-contrat.md)).
 
 ## 🔒 Confidentialité et usage responsable
 
@@ -351,7 +400,8 @@ flowchart LR
   [docs/securite.md](docs/securite.md).
 - L'assistant IA ne reçoit jamais ton identité, tes coordonnées, tes réponses types ni tes identifiants : seulement
   le texte des offres, tes critères et, avec ton consentement, le contenu professionnel de ton CV
-  ([docs/ia-contrat.md](docs/ia-contrat.md)).
+  ([docs/ia-contrat.md](docs/ia-contrat.md)). Les messages de ta boîte de réception, si tu en actives la lecture,
+  restent eux aussi sur ton PC.
 - Indeed et LinkedIn interdisent la collecte automatisée dans leurs conditions d'utilisation. JobRadar
   consulte leurs pages publiques **sans connexion**, à faible volume et avec des pauses, pour un **usage
   personnel**. Un blocage temporaire reste possible ; les autres sources continuent alors de fonctionner.
@@ -380,8 +430,6 @@ flowchart LR
 
 ## 🗺️ Feuille de route
 
-Le plan détaillé est dans [docs/etude-faisabilite-cv-lettre.md](docs/etude-faisabilite-cv-lettre.md) (section 11).
-
 - [x] **Étape 1** : dates limites et priorité, règles par entreprise, alertes, relances guidées, entretiens dans l'agenda, qualité du dépôt
 - [x] **Étape 2** : archivage local de chaque candidature (copie PDF et capture de l'offre), sauvegarde et export
 - [x] **Étape 3** : profil candidat, CV et lettre adaptés à chaque offre, contrôle ATS
@@ -399,23 +447,31 @@ JobRadar/
 ├── requirements.txt
 ├── jobradar/
 │   ├── server.py                 # API web (FastAPI)
+│   ├── cli.py                    # serve · refresh · backup · navigateur · restaurer
+│   ├── config.py                 # chemins et configuration (data/config.json)
 │   ├── pipeline.py               # collecte → filtrage → dédoublonnage → analyse
 │   ├── matching.py               # règles de pertinence et de dédoublonnage
 │   ├── ai.py                     # appels à Claude Code / Codex, prompts et schémas JSON
-│   ├── db.py                     # stockage SQLite
-│   ├── migrations.py             # évolutions versionnées du schéma de la base
-│   ├── workflow.py               # règles de priorité, dates limites et relances
+│   ├── db.py · migrations.py     # stockage SQLite et évolutions versionnées du schéma
+│   ├── workflow.py · today.py    # priorités, dates limites, relances · écran « Aujourd'hui »
 │   ├── notifications.py          # alertes dans l'application, sur le bureau et récapitulatif e-mail
-│   ├── mailer.py                 # e-mail : réglages, mot de passe (trousseau), message, envoi SMTP chiffré
-│   ├── calendar_export.py        # export des entretiens (.ics)
-│   ├── archive.py                # dossiers d'archives des candidatures
-│   ├── capture.py                # copie PDF et capture d'écran des pages d'offres
-│   ├── export.py                 # export CSV et sauvegarde ZIP
-│   ├── cli.py                    # serve · refresh
+│   ├── mailer.py · inbox.py      # envoi SMTP chiffré · lecture locale de la boîte de réception (IMAP)
+│   ├── auth.py                   # connexion locale (identifiant et mot de passe)
+│   ├── vault.py · private_io.py  # coffre AES-256-GCM · fichiers privés chiffrés au repos
+│   ├── profile.py                # profil candidat, import de sources, versions, avatar
+│   ├── profile_coach.py · answer_memory.py  # « Renforcer mon profil » · réponses types datées
+│   ├── cv_engine.py · tailoring.py  # classement local selon l'offre · CV et lettres adaptés
+│   ├── render/                   # rendu PDF/DOCX/LaTeX et contrôle ATS
+│   ├── preparation.py            # préparation en arrière-plan et auto-candidature
+│   ├── application_*.py          # candidature : orchestration, file, formulaires, navigateur, supervision IA
+│   ├── playbooks.py · login_credentials.py  # mémoire de parcours par site · identifiants par domaine
+│   ├── interview_prep.py · interview_simulation.py · contacts.py · analytics.py
+│   ├── archive.py · capture.py · redaction.py  # archives, copie des pages d'offres, assainissement
+│   ├── export.py · calendar_export.py  # export CSV, sauvegarde ZIP · entretiens (.ics)
 │   ├── sources/                  # un collecteur par site
-│   └── static/                   # interface (HTML/CSS/JS, sans build)
+│   └── static/                   # interface (HTML/CSS/JS, sans build), polices, avatars
 ├── tests/                        # tests automatisés (pytest)
-├── docs/                         # étude, logo, captures
+├── docs/                         # sécurité, contrat IA, logo, captures
 ├── candidatures/                 # créé à l'usage : un dossier par candidature (ignoré par git)
 └── data/                         # créé au lancement : base, configuration, secrets.json éventuel (ignoré par git)
 ```

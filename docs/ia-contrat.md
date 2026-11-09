@@ -20,6 +20,13 @@ avec des valeurs sentinelles.
 Le programme résout la valeur en local (`application_supervisor.match_option`, `application_browser.best_option`) et
 refuse toute action hors de l'instantané, sur un champ sensible ou vers une case de newsletter.
 
+Après un remplissage vérifié, la correspondance « libellé du champ → clé du profil » est mémorisée par site
+(`playbooks.py`, sans aucune valeur). À la visite suivante, ces champs sont remplis depuis le profil avant tout appel
+à l'IA.
+
+La boîte de réception, quand sa lecture est activée, est traitée uniquement en local (`inbox.py`) : aucun message,
+objet ou expéditeur n'est transmis à l'IA.
+
 ## Mémoire des réponses
 
 | Concept | Validité |

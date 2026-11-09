@@ -16,7 +16,7 @@
     { target: "#searchList", title: "3. Mes recherches", body: `Chaque recherche enregistrée liste ses offres, notées et
       expliquées par l'IA. Une même offre publiée sur plusieurs sites n'apparaît qu'une fois.` },
     { target: ".side-bottom", title: "4. Profil et réglages", body: `<b>Mon profil</b>, à remplir en premier : importe ton CV,
-      réponds aux informations souvent demandées et suis « Renforcer mon profil ».<br><b>Réglages</b> : coffre chiffré,
+      choisis ton avatar, réponds aux informations souvent demandées et suis « Renforcer mon profil ».<br><b>Réglages</b> : coffre chiffré,
       navigateur du robot et connexion Google, boîte de réception, sauvegardes.` },
     { target: ".top-actions", title: "5. La barre du haut", body: `De gauche à droite : le <b>?</b> rouvre ce guide, la lune
       change de thème, la <b>cloche</b> affiche les notifications (la pastille rouge en donne le nombre), et ton

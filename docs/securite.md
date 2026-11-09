@@ -13,6 +13,7 @@ pas l'être.
 | DNS rebinding | Même contrôle `Host` (127.0.0.1, localhost, ::1 uniquement) |
 | Fuite vers l'assistant IA | Contrat aveugle : aucune donnée privée dans un prompt (voir `ia-contrat.md`) |
 | Formulaire de candidature piégé (injection de consignes) | Actions IA limitées à un ensemble fermé et validées localement |
+| E-mail piégé dans la boîte de réception | Lu localement par des règles fixes, jamais transmis à l'IA ; statut seulement proposé |
 
 Hors périmètre : un logiciel malveillant qui s'exécute avec ton compte pendant que JobRadar est déverrouillé.
 
@@ -28,7 +29,8 @@ Hors périmètre : un logiciel malveillant qui s'exécute avec ton compte pendan
 
 ## Classification des données
 
-- **Chiffrées** : profil (`data/profil/`, versions, sessions, documents de base), archives `candidatures/` (PDF,
+- **Chiffrées** : profil (`data/profil/`, versions, sessions, documents de base, mémoire de parcours par site qui
+  associe des libellés de champs à des clés du profil, sans aucune valeur), archives `candidatures/` (PDF,
   captures, journaux du robot, DOM enregistrés), colonnes privées de la base (notes, historique, réponses de
   formulaire, interventions, compositions de documents, contacts, entretiens, notifications, préparations).
 - **En clair** : offres publiques, recherches, états, identifiants et dates techniques nécessaires aux index.
@@ -53,6 +55,19 @@ Hors périmètre : un logiciel malveillant qui s'exécute avec ton compte pendan
   (captures, PDF) sont scellés à la fin de chaque candidature et à chaque actualisation quotidienne.
 - Un document à déposer dans un formulaire est déchiffré dans un dossier temporaire en 0700, supprimé ensuite.
 - Coffre fermé (trousseau verrouillé ou absent) : aucune écriture privée n'est possible.
+
+## Boîte de réception et comptes des sites de candidature
+
+- La lecture de la boîte (désactivée par défaut) se fait en IMAP sur SSL, avec l'identifiant et le mot de passe des
+  alertes par e-mail (trousseau du système). Le dossier est ouvert en lecture seule : aucun message n'est marqué comme
+  lu, déplacé ni supprimé. Seuls les messages des derniers jours sont lus (30 par défaut, `inbox.days`), 200 au plus.
+- Les messages sont classés par règles fixes (accusé de réception, refus, entretien) et ne sont jamais envoyés à l'IA.
+  Seul l'objet d'un message rapproché d'une candidature est conservé, dans la notification qui propose le nouveau
+  statut (colonne chiffrée). Le statut n'est jamais changé sans toi.
+- Pendant une candidature, un code ou un lien de vérification n'est retenu que dans un message dont l'expéditeur ou
+  le lien correspond au domaine du site en cours.
+- Les comptes créés automatiquement (option désactivée par défaut) reçoivent un mot de passe aléatoire de 24
+  caractères, rangé dans le trousseau (ou `data/secrets.json`, 0600) pour ce seul domaine avant le clic de création.
 
 ## Activation, migration, récupération, rotation
 
