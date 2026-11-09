@@ -86,8 +86,16 @@ opts.querySelectorAll('li').forEach(li => li.onclick = () => { chosen.textConten
 document.forms[0].onsubmit = e => { if (chosen.textContent.startsWith('0 items')) { e.preventDefault();
   alert('required'); } };</script></body></html>"""
 
+# Remerciement atypique : aucun mot attendu, mais le formulaire a disparu sans erreur.
+ODD_THANKS_FORM = ATS_FORM.replace('action="/envoi"', 'action="/envoi-atypique"')
+ODD_THANKS = "<html><body><h1>C'est noté !</h1><p>Notre équipe revient vers vous très vite.</p></body></html>"
+# Refus côté serveur : la page revient avec le formulaire et une erreur, jamais une « confirmation ».
+REFUSED_FORM = ATS_FORM.replace('action="/envoi"', 'action="/envoi-refuse"')
+REFUSED = ATS_FORM.replace("<form", '<p role="alert">Le fichier CV est trop volumineux.</p><form')
+
 PAGES = {"/sg/identite": SG_IDENTITY, "/sg/pieces": SG_ATTACH, "/sg/envoi": SG_SEND, "/relais": RELAY,
          "/ats/formulaire": ATS_FORM, "/phenom": PHENOM_STEP, "/combo": SEARCH_COMBO,
+         "/atypique": ODD_THANKS_FORM, "/note": ODD_THANKS, "/refus": REFUSED_FORM, "/refus-erreur": REFUSED,
          "/merci": "<html><body><h1>Merci pour votre candidature</h1></body></html>"}
 
 
@@ -103,7 +111,8 @@ class _Bench(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         _Bench.posts.append((self.path, self.rfile.read(int(self.headers.get("Content-Length") or 0))))
-        target = {"/sg/identite": "/sg/pieces", "/envoi": "/merci"}.get(self.path)
+        target = {"/sg/identite": "/sg/pieces", "/envoi": "/merci", "/envoi-atypique": "/note",
+                  "/envoi-refuse": "/refus-erreur"}.get(self.path)
         self.send_response(303 if target else 200)
         if target:
             self.send_header("Location", target)
@@ -178,3 +187,33 @@ def test_bench_search_combobox_is_filled_locally(client, bench, supervised_brows
 def test_bench_search_list_option_choice(value, options, expected) -> None:
     assert application_browser.best_option(value, options) == expected
 
+
+
+def test_bench_atypical_thank_you_page_is_judged_by_the_ai(client, bench, supervised_browser,  # noqa: F811
+                                                           monkeypatch) -> None:
+    support._scripted_ai(monkeypatch)
+    answer = support.ai.ask_ai
+
+    def judge(prompt, schema, task):  # « C'est noté ! » : seule l'IA peut y lire une confirmation
+        if "C'est noté" in prompt and schema is application_browser.application_supervisor.DECISION_SCHEMA:
+            return support._decision(page_kind="confirmation")
+        return answer(prompt, schema, task)
+
+    monkeypatch.setattr(support.ai, "ask_ai", judge)
+    saved = _run(client, bench, "/atypique")
+    assert saved["status"] == "submitted", saved["intervention"]
+
+
+def test_bench_french_confirmation_wording_is_recognised() -> None:
+    class Page:
+        url = "https://ats.example.com/candidature/42"
+    assert application_browser._confirmed(Page(), "votre candidature a bien été transmise au recruteur.")
+    assert not application_browser._confirmed(Page(), "merci de remplir tous les champs obligatoires.")
+
+
+def test_bench_server_refusal_is_never_a_confirmation(client, bench, supervised_browser, monkeypatch) -> None:  # noqa: F811
+    monkeypatch.setattr(application_browser.application_supervisor, "mode", lambda: "off")
+    monkeypatch.setattr(application_browser, "CONFIRMATION_WAIT_S", 5)
+    saved = _run(client, bench, "/refus")
+    assert saved["status"] == "needs_user"
+    assert saved["intervention"]["kind"] == "confirmation_missing"  # jamais compté comme envoyé

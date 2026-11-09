@@ -652,7 +652,60 @@ def _validation_errors(page) -> list[str]:
 
 def _confirmed(page, body_text: str) -> bool:
     url = page.url.casefold()
-    return any(word in body_text for word in CONFIRMATION_WORDS) or any(word in url for word in CONFIRMATION_URL_WORDS)
+    folded = application_adapters._fold(body_text)
+    return (any(word in body_text for word in CONFIRMATION_WORDS) or any(word in folded for word in CONFIRMATION_PHRASES)
+            or any(word in url for word in CONFIRMATION_URL_WORDS))
+
+
+# Formulations de confirmation, sans accents ni ponctuation (comparées au texte replié par ``_fold``).
+CONFIRMATION_PHRASES = (
+    "merci pour votre candidature", "merci de votre candidature", "merci d avoir postule", "merci pour ta candidature",
+    "votre candidature a bien ete", "votre candidature a ete envoyee", "votre candidature a ete transmise",
+    "votre candidature a ete enregistree", "votre candidature a bien ete prise en compte", "candidature envoyee",
+    "candidature enregistree", "candidature transmise", "nous avons bien recu votre candidature",
+    "we have received your application", "we ve received your application", "your application has been submitted",
+    "your application has been received", "application submitted", "application received",
+    "successfully submitted", "thank you for applying", "thanks for applying", "thank you for your application",
+    "votre candidature est en cours de traitement")
+CONFIRMATION_WAIT_S = 20
+
+
+def _form_gone(page, submit) -> bool:
+    """Le bouton d'envoi a disparu, sans erreur de validation, connexion ni captcha (indice, pas une preuve)."""
+    try:
+        if submit.count() and submit.is_visible():
+            return False
+    except PlaywrightError:
+        pass  # bouton détaché : la page a changé
+    if _validation_errors(page) or _visible_password(page) or _captcha_visible(page):
+        return False
+    try:
+        return page.locator('input[type="file"]:visible, input[type="email"]:visible').count() == 0
+    except PlaywrightError:
+        return False
+
+
+def _wait_confirmation(page, submit) -> str | None:
+    """Surveille la page après le clic d'envoi ; renvoie le signal de confirmation ou None."""
+    deadline = time.monotonic() + CONFIRMATION_WAIT_S
+    gone_since = None
+    while time.monotonic() < deadline:
+        try:
+            text = page.locator("body").inner_text(timeout=3_000).casefold()
+        except PlaywrightError:
+            text = ""
+        if _confirmed(page, text):
+            return "texte ou adresse de confirmation"
+        if _form_gone(page, submit):
+            # Formulaire disparu de façon stable (3 s) : page atypique (remerciement ou étape de plus). Ce n'est
+            # pas une preuve d'envoi ; on cesse d'attendre et l'IA juge la page tout de suite.
+            gone_since = gone_since or time.monotonic()
+            if time.monotonic() - gone_since >= 3:
+                return None
+        else:
+            gone_since = None
+        page.wait_for_timeout(1_000)
+    return None
 
 
 CAPTCHA_JS = r"""(selectors) => [...document.querySelectorAll(selectors)].some(el => {
@@ -2295,10 +2348,11 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
     db.mark_submit_clicked(attempt["id"])
     submit.click(timeout=10_000)
     page.wait_for_timeout(1500)
-    text = page.locator("body").inner_text(timeout=5000).casefold()
-    if not _confirmed(page, text):
+    signal = _wait_confirmation(page, submit)
+    if signal:
+        supervision.journal.note(f"Confirmation reconnue : {signal}.")
+    else:
         # Après le clic seulement, l'IA peut reconnaître une confirmation formulée autrement.
-        page.wait_for_timeout(2000)
         _, decision = supervision.decide(page)
         if not decision or decision["page_kind"] != "confirmation":
             supervision.journal.note("Envoi cliqué, confirmation non reconnue : vérification demandée.")
