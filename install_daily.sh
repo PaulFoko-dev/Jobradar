@@ -24,7 +24,7 @@ command -v systemctl >/dev/null 2>&1 || fail "systemctl est introuvable ; ce scr
 # Les retours a la ligne rendraient le fichier d'unite ambigu ou invalide.
 [[ "$SCRIPT_DIR" != *$'\n'* && "$UNIT_DIR" != *$'\n'* ]] || fail "un chemin contient un retour a la ligne non pris en charge."
 
-# Echappe une valeur placee entre guillemets dans une directive systemd.
+# Echappe une valeur pour une directive systemd (WorkingDirectory n accepte pas de guillemets).
 systemd_quote_value() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -68,7 +68,7 @@ Description=JobRadar - actualisation des recherches d'offres
 
 [Service]
 Type=oneshot
-WorkingDirectory="$SYSTEMD_DIR"
+WorkingDirectory=$SYSTEMD_DIR
 Environment="PATH=$SYSTEMD_PATH"
 ExecStart="$SYSTEMD_DIR/.venv/bin/python" -m jobradar.cli refresh
 EOF
