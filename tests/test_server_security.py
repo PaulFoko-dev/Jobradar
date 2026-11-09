@@ -44,3 +44,14 @@ def test_full_migration_requires_a_confirmed_recovery_key(client, env_key) -> No
     done = client.post("/api/vault/migrate").json()
     assert done["unlocked"] and done["values"] >= 1
     assert client.post("/api/vault/migrate").json()["values"] == 0
+
+
+def test_a_locked_vault_gives_a_clear_423_instead_of_a_server_error(client, env_key, monkeypatch) -> None:
+    client.post("/api/applications", json={"title": "Stage", "company": "Acme", "url": "https://example.com/o"})
+    client.post("/api/vault/init")
+    client.post("/api/vault/confirm-recovery")
+    client.post("/api/vault/migrate")
+    vault.lock()
+    monkeypatch.setenv(vault.ENV_KEY, base64.urlsafe_b64encode(os.urandom(32)).decode())  # clé perdue
+    response = client.get("/api/applications")
+    assert response.status_code == 423 and "clé de récupération" in response.json()["detail"]

@@ -4,9 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>JobRadar</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preload" href="/static/fonts/work-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
   <link rel="icon" type="image/png" href="/static/img/favicon.png">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/profile.css">
@@ -28,6 +27,10 @@
       </button>
     </div>
     <button class="btn primary block" id="newSearchBtn">+ Nouvelle recherche</button>
+    <button class="search-item nav-tracker" id="todayNav">
+      <span><svg viewBox="0 0 24 24" class="ic stroke"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/></svg> Aujourd'hui</span>
+      <span class="count" id="todayCount">0</span>
+    </button>
     <button class="search-item nav-tracker" id="trackerNav">
       <span><svg viewBox="0 0 24 24" class="ic stroke"><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg> Mes candidatures</span>
       <span class="count" id="trackerCount">0</span>
@@ -254,6 +257,11 @@
       <p id="aaEmpty" class="muted" hidden>Aucune candidature automatique pour ce filtre.</p>
     </section>
 
+    <section id="viewToday" class="view" hidden>
+      <header class="page-head"><h1>Aujourd'hui</h1><p class="muted">Ce qui demande ton attention, du plus urgent au moins urgent.</p></header>
+      <div id="todayBody" class="today-grid"><p class="muted">Chargement…</p></div>
+    </section>
+
     <section id="viewTracker" class="view" hidden>
       <header class="page-head">
         <div>
@@ -332,6 +340,7 @@
 <script src="/static/profile-ui.js"></script>
 <script src="/static/documents-ui.js"></script>
 <script src="/static/apply-ui.js"></script>
+<script src="/static/today-ui.js"></script>
 <script src="/static/guide-ui.js"></script>
 <script src="/static/vault-ui.js"></script>
 </body>

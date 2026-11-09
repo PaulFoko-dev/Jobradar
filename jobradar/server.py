@@ -37,6 +37,7 @@ from . import (
     profile,
     profile_coach,
     tailoring,
+    today,
     vault,
     workflow,
 )
@@ -71,6 +72,13 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="JobRadar", lifespan=lifespan)
+
+@app.exception_handler(vault.VaultError)
+async def vault_locked(_request: Request, exc: vault.VaultError):
+    """Coffre fermé ou clé introuvable : message clair (423) au lieu d'une erreur serveur."""
+    return JSONResponse({"detail": f"Coffre verrouillé : {exc} Saisis ta clé de récupération pour accéder à tes "
+                                   "données (rechargement de la page)."}, status_code=423)
+
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -165,6 +173,11 @@ def inbox_settings():
 def put_inbox_settings(body: InboxIn):
     config.save_config_section("inbox", body.model_dump())
     return inbox.settings()
+
+
+@app.get("/api/today")
+def today_summary():
+    return today.summary()
 
 
 @app.get("/api/analytics/robot")

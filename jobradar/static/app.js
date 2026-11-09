@@ -193,6 +193,7 @@ function lockScroll() {
 function showView(id) {
   $$(".view").forEach(v => (v.hidden = v.id !== id));
   $("#trackerNav").classList.toggle("on", id === "viewTracker");
+  $("#todayNav")?.classList.toggle("on", id === "viewToday");
   $("#profileNav")?.classList.toggle("on", id === "viewProfile");
   $("#autoApplyNav").classList.toggle("on", id === "viewAutoApply");
   if (id !== "viewResults") $$("#searchList .search-item").forEach(b => b.classList.remove("on"));
@@ -799,9 +800,24 @@ function companyStar(o) {
   return o.company_rule === "favorite" ? `<span class="fav-co" title="Entreprise favorite" aria-label="Entreprise favorite">★</span> ` : "";
 }
 
+// Valeurs brutes des sources (« INTERN, FULL_TIME », « fulltime, internship ») traduites en libellés lisibles.
+const RAW_CONTRACT_LABELS = [
+  [/intern|stage|stagiaire/i, "Stage"], [/apprentice|alternan|apprentissage|professionnalisation/i, "Alternance"],
+  [/\bvie\b/i, "VIE"], [/freelance|contractor|independant|indépendant/i, "Freelance"],
+  [/temporary|\bcdd\b|fixed[- ]term|durée déterminée/i, "CDD"], [/full[ -]?time|permanent|\bcdi\b/i, "CDI"],
+  [/part[ -]?time|temps partiel/i, "Temps partiel"],
+];
+
+function contractLabel(raw) {
+  const text = String(raw || "").trim();
+  if (!text || text === "Non précisé" || /^contract$/i.test(text)) return "";
+  const found = RAW_CONTRACT_LABELS.find(([pattern]) => pattern.test(text));
+  return found ? found[1] : text.length <= 30 ? text : "";
+}
+
 function contractBadge(o) {
-  const c = o.analysis?.contract || o.contract;
-  return c && c !== "Non précisé" ? `<span class="badge contract">${esc(c)}</span>` : "";
+  const c = contractLabel(o.analysis?.contract || o.contract);
+  return c ? `<span class="badge contract">${esc(c)}</span>` : "";
 }
 
 function autoQueueButton(o) {
@@ -3019,6 +3035,8 @@ window.JobRadarUI = Object.freeze({
   loadAutoApplyPage(); // compteur « à reprendre » de la barre latérale
   setInterval(loadAutoApplyPage, 2 * 6e4);
   await loadSearches();
-  if (state.searches.length) openResults(state.searches[0].id);
+  // Accueil : l'écran « Aujourd'hui » dès qu'il y a une recherche, sinon l'écran de bienvenue.
+  if (state.searches.length && window.JobRadarToday) window.JobRadarToday.open();
+  else if (state.searches.length) openResults(state.searches[0].id);
   else showView("viewWelcome");
 })();

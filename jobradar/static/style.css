@@ -890,3 +890,12 @@ table.apps .k-flags { margin-top: 4px; }
 .guide-dot { width: 9px; height: 9px; border-radius: 50%; border: 0; padding: 0; background: var(--border); cursor: pointer; }
 .guide-dot.on { background: var(--accent); width: 22px; border-radius: 6px; }
 .guide-spacer { flex: 1; }
+/* Écran « Aujourd'hui » */
+.today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+.today-card.warn { border-left: 4px solid var(--mid); }
+.today-group { margin: 12px 0 6px; font-size: .9em; color: var(--muted); }
+.today-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.today-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px;
+  border-radius: 8px; background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.today-list li > span { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .today-grid { grid-template-columns: 1fr; } .today-list li { flex-direction: column; align-items: flex-start; } }
