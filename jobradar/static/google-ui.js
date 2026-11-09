@@ -46,5 +46,9 @@
   }
 
   window.JobRadarGoogle = Object.freeze({ open });
-  maybeShow();
+  (window.JobRadarAuth?.ready() || Promise.resolve()).then(() => {
+    // Après le guide : la présentation Google attend sa fermeture (et celle de l'écran du coffre).
+    if (window.JobRadarGuide?.pending) window.addEventListener("jobradar:guide-closed", maybeShow, { once: true });
+    else maybeShow();
+  });
 })();

@@ -49,6 +49,10 @@ async function api(path, opts = {}) {
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    window.JobRadarAuth?.require();
+    throw new Error("Connexion requise.");
+  }
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail || msg; } catch {}
@@ -190,8 +194,36 @@ function lockScroll() {
   document.body.style.overflow = $("#modal").hidden && $("#dialog").hidden && $("#notifPanel").hidden ? "" : "hidden";
 }
 
+const VIEW_TITLES = {
+  viewToday: "Aujourd'hui", viewTracker: "Mes candidatures", viewAutoApply: "Candidatures automatiques",
+  viewProfile: "Mon profil", viewEditor: "Nouvelle recherche", viewResults: "Recherche", viewWelcome: "Bienvenue",
+};
+
+// Barre supérieure : section courante (le nom de la recherche pour une liste d'offres).
+function setTopTitle(text) {
+  const title = $("#topTitle");
+  if (title) title.textContent = text;
+  document.title = `${text} · JobRadar`;
+}
+
+// Tiroir de navigation sur mobile : ouvert par le bouton menu, refermé après un choix ou par Échap.
+function setSidebar(open) {
+  document.body.classList.toggle("side-open", open);
+  $("#menuToggle")?.setAttribute("aria-expanded", String(open));
+  $(".side-backdrop")?.toggleAttribute("hidden", !open);
+}
+$("#menuToggle")?.addEventListener("click", () => setSidebar(!document.body.classList.contains("side-open")));
+document.querySelectorAll("[data-side-close]").forEach(el => el.addEventListener("click", () => setSidebar(false)));
+$("#sidebar")?.addEventListener("click", event => {
+  if (event.target.closest("button.search-item, #newSearchBtn")) setSidebar(false);
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && document.body.classList.contains("side-open")) setSidebar(false);
+});
+
 function showView(id) {
   $$(".view").forEach(v => (v.hidden = v.id !== id));
+  setTopTitle(VIEW_TITLES[id] || "JobRadar");
   $("#trackerNav").classList.toggle("on", id === "viewTracker");
   $("#todayNav")?.classList.toggle("on", id === "viewToday");
   $("#profileNav")?.classList.toggle("on", id === "viewProfile");
@@ -252,7 +284,7 @@ async function loadSearches() {
   const nav = $("#searchList");
   nav.innerHTML = state.searches.map(s => `
     <button class="search-item ${s.id === state.currentId ? "on" : ""}" data-id="${s.id}">
-      <span>${esc(s.name)}</span><span class="count">${s.offer_count}</span>
+      <span><svg viewBox="0 0 24 24" class="ic stroke" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12 18 6"/></svg> ${esc(s.name)}</span><span class="count">${s.offer_count}</span>
     </button>`).join("") || `<p class="muted small">Aucune recherche enregistrée.</p>`;
   $$(".search-item", nav).forEach(b => (b.onclick = () => openResults(+b.dataset.id)));
   loadApps();
@@ -444,6 +476,7 @@ async function openResults(id) {
     + (s.last_run ? ` · dernière exécution ${new Date(s.last_run).toLocaleString("fr-FR")}` : " · jamais exécutée");
   applyPrefsToFilters(prefs(id));
   showView("viewResults");
+  setTopTitle(s.name);
   loadAutoApply();
   await loadOffers();
   pollStatus();
@@ -3031,6 +3064,7 @@ window.JobRadarUI = Object.freeze({
 });
 
 (async function init() {
+  await window.JobRadarAuth?.ready();  // connexion (ou création du compte) avant tout appel à l'API
   try {
     applyAIInfo(await api("/api/info"));
   } catch { state.aiLabel = "L'IA"; }
