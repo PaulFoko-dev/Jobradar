@@ -881,3 +881,12 @@ table.apps .k-flags { margin-top: 4px; }
   padding: 14px; border: 2px dashed var(--accent); border-radius: 10px; word-break: break-all; user-select: all; text-align: center; }
 .vault-actions { display: flex; gap: 8px; margin: 8px 0 14px; }
 .vault-check { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }
+/* Guide d'utilisation */
+.guide-modal { max-width: 620px; }
+.guide-icon { font-size: 2.4rem; line-height: 1; margin-bottom: 8px; }
+.guide-body p, .guide-body li { line-height: 1.55; }
+.guide-body ul, .guide-body ol { padding-left: 20px; display: grid; gap: 6px; }
+.guide-dots { display: flex; gap: 6px; justify-content: center; margin-top: 16px; }
+.guide-dot { width: 9px; height: 9px; border-radius: 50%; border: 0; padding: 0; background: var(--border); cursor: pointer; }
+.guide-dot.on { background: var(--accent); width: 22px; border-radius: 6px; }
+.guide-spacer { flex: 1; }

@@ -131,5 +131,7 @@
     }
   });
   window.JobRadarVault = Object.freeze({ check, open: showIntro, consent: showConsent, migrate: showMigration });
-  check();
+  // Première ouverture : le guide passe d'abord, l'écran du coffre suit sa fermeture.
+  if (window.JobRadarGuide?.pending) window.addEventListener("jobradar:guide-closed", check, { once: true });
+  else check();
 })();
