@@ -148,3 +148,20 @@ def test_la_pertinence_departage_les_offres_du_meme_jour(criteres_stage: dict) -
     cible = {"title": "Stage analyste SOC", "description": "", "date_posted": "2026-10-20"}
     vague = {"title": "Chargé de mission", "description": "", "date_posted": "2026-10-20"}
     assert scoring_order(cible, criteres_stage) < scoring_order(vague, criteres_stage)
+
+
+def test_offers_leading_to_the_same_application_page_are_one_offer() -> None:
+    from jobradar.matching import target_key
+
+    index = DedupIndex()
+    index.add(offre(title="Stagiaire Pentester / Security Researcher", company="Patrowl",
+                    url="https://www.welcometothejungle.com/fr/companies/patrowl/jobs/stagiaire-pentester_paris?utm=x"),
+              "patrowl", oid=63)
+    renamed = offre(title="Stage sécurité offensive", company="Patrowl SAS",
+                    url="https://example-board.fr/o/1", links=[{"source": "candidature directe", "apply": True,
+                    "url": "https://welcometothejungle.com/fr/companies/patrowl/jobs/stagiaire-pentester_paris/"}])
+    assert index.find(renamed) == ("patrowl", 63)
+    # Identifiant dans les paramètres : deux offres Indeed distinctes ne sont jamais confondues.
+    assert target_key("https://fr.indeed.com/viewjob?jk=1&from=x") != target_key("https://fr.indeed.com/viewjob?jk=2")
+    assert target_key("https://careers.example.com/job/Apply?jobId=7&utm_source=a") == \
+        target_key("https://careers.example.com/job/Apply/?utm_source=b&jobId=7")

@@ -1,6 +1,7 @@
 """Pertinence d'une offre (avant toute analyse IA) et détection des doublons entre sites."""
 import re
 from datetime import date, timedelta
+from urllib.parse import parse_qsl, urlsplit
 
 from .sources.common import matched_keywords, matches_any, norm, strip_contract_words
 
@@ -141,6 +142,20 @@ GENERIC_ROOTS = {"credit", "banque", "caisse", "societe", "compagnie", "entrepri
                  "consulting", "conseil", "digital", "tech", "global", "international", "le", "la", "les", "l"}
 
 
+# Paramètres qui identifient l'offre elle-même (viewjob?jk=…, ?jobId=…) : conservés ; les autres (suivi) ignorés.
+ID_PARAMS = re.compile(r"^(?:jk|jobid|job_id|job|id|gh_jid|reqid|requisitionid|postingid|vacancyid|offerid|ref)$", re.I)
+
+
+def target_key(url: str | None) -> str:
+    """Page normalisée : hôte sans www, chemin sans « / » final, paramètres d'identifiant seulement."""
+    parts = urlsplit(url or "")
+    host = parts.netloc.lower().removeprefix("www.")
+    if not host or not parts.path.strip("/"):
+        return ""
+    ids = sorted(f"{name.lower()}={value}" for name, value in parse_qsl(parts.query) if ID_PARAMS.match(name))
+    return f"{host}{parts.path.rstrip('/')}" + (f"?{'&'.join(ids)}" if ids else "")
+
+
 def company_root(company: str | None) -> str:
     """Premier mot distinctif : « HGH Systèmes Infrarouges » et « HGH Infrared Systems » -> « hgh »."""
     words = company_key(company).split()
@@ -166,8 +181,19 @@ class DedupIndex:
         self._by_root: dict[str, list[tuple[frozenset, str, str, int | None]]] = {}
         self._by_title: dict[frozenset, tuple[str, int | None]] = {}
         self._all: list[tuple[frozenset, bool, str, int | None]] = []
+        self._by_target: dict[str, tuple[str, int | None]] = {}
+
+    @staticmethod
+    def _targets(o: dict) -> set[str]:
+        """Pages de l'offre et de son formulaire : deux annonces qui y mènent sont la même offre."""
+        urls = [o.get("url"), o.get("apply_url")] + [link.get("url") for link in o.get("links") or []
+                                                    if isinstance(link, dict)]
+        return {key for key in map(target_key, urls) if key}
 
     def find(self, o: dict) -> tuple[str, int | None] | None:
+        for target in self._targets(o):
+            if target in self._by_target:
+                return self._by_target[target]
         tokens = title_tokens(o["title"])
         for other, key, oid in self._by_company.get(company_key(o.get("company")), []):
             if similar(tokens, other):
@@ -195,3 +221,5 @@ class DedupIndex:
         if len(tokens) >= self.SAME_TITLE_MIN_TOKENS:
             self._by_title.setdefault(tokens, (key, oid))
         self._all.append((tokens, is_relay(o.get("company")), key, oid))
+        for target in self._targets(o):
+            self._by_target.setdefault(target, (key, oid))

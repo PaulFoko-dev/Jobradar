@@ -354,3 +354,15 @@ def test_answering_an_undetected_field_is_rejected(data_dir) -> None:
                                       }]})
     with pytest.raises(ValueError, match="champ demandé"):
         application_flow.answer_fields(attempt["id"], [{"selector": '[name="other"]', "value": "Oui"}])
+
+
+def test_a_second_announcement_leading_to_an_already_sent_form_is_blocked(client) -> None:
+    from jobradar import application_flow, db
+
+    url = "https://www.welcometothejungle.com/fr/companies/patrowl/jobs/stagiaire-pentester_paris"
+    first = client.post("/api/applications", json={"title": "Stagiaire Pentester", "company": "Patrowl", "url": url}).json()
+    db.update_application(first["id"], {"status": "envoyee"})
+    second = client.post("/api/applications", json={"title": "Stage sécurité offensive", "company": "Patrowl",
+                                                    "url": url + "?utm_source=indeed"}).json()
+    assert application_flow.same_target_sent(second["id"], url + "/")["id"] == first["id"]
+    assert application_flow.same_target_sent(first["id"], url) is None

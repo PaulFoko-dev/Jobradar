@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from . import application_adapters, config, db, profile, tailoring, workflow
+from . import application_adapters, config, db, matching, profile, tailoring, workflow
 
 LOGGER = logging.getLogger(__name__)
 MANUAL_ONLY_HOSTS = {"indeed", "linkedin"}
@@ -122,6 +122,22 @@ def _manual_help(application_id: int, attempt: dict) -> dict:
     }
 
 
+def same_target_sent(application_id: int, url: str | None) -> dict | None:
+    """Autre candidature déjà envoyée vers la même page (annonces republiées sous un autre titre)."""
+    key = matching.target_key(url)
+    if not key:
+        return None
+    for other in db.list_applications():
+        if other["id"] == application_id:
+            continue
+        targets = {matching.target_key(other.get("url"))} | {
+            matching.target_key(attempt.get("target_url")) for attempt in db.list_application_attempts(other["id"])}
+        sent = other.get("applied_at_utc") or other.get("status") not in {"consultee", "abandon"}
+        if key in targets and sent:
+            return other
+    return None
+
+
 def start(application_id: int, *, mode: str, cv_document_id: int | None,
           letter_document_id: int | None, remember: bool = False,
           review_policy: str = "first_five") -> dict:
@@ -132,6 +148,10 @@ def start(application_id: int, *, mode: str, cv_document_id: int | None,
         raise db.Conflict("Une session de candidature est déjà ouverte pour cette offre : reprends-la ou annule-la.")
     if any(attempt["status"] == "submitted" for attempt in current["attempts"]):
         raise db.Conflict("Une candidature a déjà été envoyée pour cette offre.")
+    twin = same_target_sent(application_id, current["application"]["url"])
+    if twin:
+        raise db.Conflict(f"Tu as déjà postulé à cette même offre via « {twin['title']} » ({twin.get('company') or ''}) : "
+                          "les deux annonces mènent au même formulaire. Rien n'a été envoyé.")
     if mode not in {"manual", "assisted"}:
         raise ValueError("Mode de candidature invalide.")
     if review_policy not in REVIEW_POLICIES:
