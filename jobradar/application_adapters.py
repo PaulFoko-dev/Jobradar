@@ -332,8 +332,11 @@ def _option_for(answer: str, options: list[str]) -> str | None:
 def standard_answer_for(field: dict, candidate: dict) -> str | None:
     """Réponse type mémorisée pour la même question (même concept, ou libellé très proche), choisie en local."""
     standard = candidate.get("standard_answers") if isinstance(candidate.get("standard_answers"), dict) else {}
+    from . import answer_memory
+
+    # Une réponse expirée (disponibilité de plus de 30 jours…) n'est plus utilisée : le formulaire la redemande.
     answers = {key: item for key, item in standard.items() if isinstance(item, dict) and not item.get("sensitive")
-               and str(item.get("answer") or "").strip()}
+               and str(item.get("answer") or "").strip() and not answer_memory.is_expired(item)}
     best = None
     concept = _concept_of(field.get("label"))
     if concept and concept in answers:

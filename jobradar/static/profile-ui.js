@@ -50,13 +50,36 @@
     return String(current.standard_answers?.[key]?.answer || "");
   }
 
+  // État de la mémoire : une réponse expirée n'est plus utilisée par le robot tant qu'elle n'est pas confirmée.
+  function answerState(key) {
+    const item = current.standard_answers?.[key];
+    if (!item?.answer || !item.validated_at) return "";
+    const day = value => new Date(value).toLocaleDateString("fr-FR");
+    const expired = item.expires_at && new Date(item.expires_at) <= new Date();
+    const status = !item.expires_at ? `validée le ${day(item.validated_at)}`
+      : expired ? `<b class="answer-expired">expirée depuis le ${day(item.expires_at)} : le robot te la redemandera</b>`
+      : `valable jusqu'au ${day(item.expires_at)}`;
+    const confirm = item.expires_at ? ` <button class="link" type="button" data-confirm-answer="${esc(key)}">Toujours valable</button>` : "";
+    return `<small class="answer-state">${status}${confirm}</small>`;
+  }
+
   function applicationField([key, label, hint]) {
     const value = standardAnswer(key);
     if (hint === "oui_non") return `<label class="field"><span>${label}</span><select name="standard-${key}">
       <option value="">Non renseigné</option><option value="Oui" ${value === "Oui" ? "selected" : ""}>Oui</option>
-      <option value="Non" ${value === "Non" ? "selected" : ""}>Non</option></select></label>`;
-    return `<label class="field"><span>${label}</span><input name="standard-${key}" value="${esc(value)}" placeholder="${hint}"></label>`;
+      <option value="Non" ${value === "Non" ? "selected" : ""}>Non</option></select>${answerState(key)}</label>`;
+    return `<label class="field"><span>${label}</span><input name="standard-${key}" value="${esc(value)}" placeholder="${hint}">${answerState(key)}</label>`;
   }
+
+  document.addEventListener("click", async event => {
+    const key = event.target?.dataset?.confirmAnswer;
+    if (!key) return;
+    try {
+      current = await api(`/api/profile/answers/${encodeURIComponent(key)}/confirm`, { method: "POST" });
+      toast("Réponse confirmée");
+      event.target.closest(".answer-state").outerHTML = answerState(key);
+    } catch (error) { toast(error.message, 5000); }
+  });
 
   function values(item) {
     const title = item.title || item.name || item.degree || item.label || "Élément sans titre";
@@ -149,12 +172,71 @@
         </section>
         ${Object.entries(SECTION_LABELS).map(([key, label]) => `<section class="panel"><h2>${label}</h2>${sectionCards(key)}</section>`).join("")}
       </div><aside class="profile-side">
+        <section class="panel"><h2>Renforcer mon profil</h2><div id="coachPanel"><p class="muted small">Analyse du profil…</p></div></section>
         <section class="panel"><h2>Documents de base</h2>${sourceCards()}</section>
         <section class="panel"><h2>Conflits</h2>${conflictCards()}</section>
         <section class="panel"><h2>Historique</h2>${versionRows()}</section>
       </aside></div>
       <div id="profileVersionDialog" class="profile-version-dialog" hidden></div>`;
     bind();
+    loadCoach();
+  }
+
+  // Enrichissement guidé : ce qui affaiblit les CV, et comment le compléter sans rien inventer.
+  async function loadCoach() {
+    const panel = document.querySelector("#coachPanel");
+    if (!panel) return;
+    let report;
+    try { report = await api("/api/profile/coach"); }
+    catch (error) { panel.innerHTML = `<p class="muted small">${esc(error.message)}</p>`; return; }
+    const items = report.items.slice(0, 8).map(row => `<li><b>${esc(row.title)}</b><br><small>${esc(row.problems.join(" · "))}</small>
+      <button class="link" type="button" data-coach-enrich="${esc(row.id)}" data-coach-title="${esc(row.title)}">Compléter</button></li>`).join("");
+    const duplicates = report.duplicates.map(row => `<li>Doublon probable : <b>${esc(row.titles[0])}</b> / <b>${esc(row.titles[1])}</b>
+      <button class="link" type="button" data-coach-merge="${esc(row.keep)}" data-coach-drop="${esc(row.drop)}">Fusionner</button></li>`).join("");
+    const skills = report.unproven_skills.length ? `<p class="small">Compétences sans preuve dans tes expériences ou projets :
+      ${esc(report.unproven_skills.slice(0, 12).join(", "))}${report.unproven_skills.length > 12 ? "…" : ""}. Elles n'apparaîtront
+      que dans la liste des compétences, jamais dans une puce.</p>` : "";
+    panel.innerHTML = (items || duplicates || skills)
+      ? `<p class="muted small">Plus tes éléments sont précis (rôle, outils, résultats chiffrés), plus chaque CV met en avant ce que l'offre demande.</p>
+         <ul class="coach-list">${duplicates}${items}</ul>${skills}
+         <button class="btn sm" type="button" data-coach-link>Rattacher les compétences à leurs preuves</button>`
+      : `<p class="muted small">Ton profil est bien fourni : rien à renforcer pour l'instant.</p>`;
+    panel.querySelectorAll("[data-coach-enrich]").forEach(button => (button.onclick = () =>
+      openEnrich(button.dataset.coachEnrich, button.dataset.coachTitle, report.questions)));
+    panel.querySelectorAll("[data-coach-merge]").forEach(button => (button.onclick = () => runOnce(button, async () => {
+      current = await api("/api/profile/coach/merge", { method: "POST", body: { keep: button.dataset.coachMerge, drop: button.dataset.coachDrop } });
+      toast("Éléments fusionnés");
+      render();
+    })));
+    const link = panel.querySelector("[data-coach-link]");
+    if (link) link.onclick = () => runOnce(link, async () => {
+      const result = await api("/api/profile/coach/link-skills", { method: "POST" });
+      current = result;
+      toast(`${result.linked} preuve(s) rattachée(s)`);
+      render();
+    });
+  }
+
+  function openEnrich(itemId, title, questions) {
+    openDialog(`<div class="m-pad"><h2 id="dialogTitle">Compléter « ${esc(title)} »</h2>
+      <p class="muted small">Réponds avec tes propres mots ; l'IA en tire des puces sans rien ajouter. Une question sans réponse est ignorée.</p>
+      <form id="coachForm">${questions.map(question => `<label class="field"><span>${esc(question.label)}</span>
+        <textarea name="${esc(question.key)}" rows="2" maxlength="1500"></textarea></label>`).join("")}</form>
+      <p class="small" id="coachResult" role="status"></p></div>
+      <div class="m-foot"><button class="btn" type="button" data-dialog-close>Annuler</button>
+        <button class="btn primary" type="button" id="coachSubmit">Ajouter les puces</button></div>`);
+    document.querySelector("[data-dialog-close]").onclick = closeDialog;
+    const submit = document.querySelector("#coachSubmit");
+    submit.onclick = () => runOnce(submit, async () => {
+      const answers = Object.fromEntries(new FormData(document.querySelector("#coachForm")).entries());
+      document.querySelector("#coachResult").textContent = "Rédaction des puces…";
+      try {
+        current = await api(`/api/profile/coach/${encodeURIComponent(itemId)}/enrich`, { method: "POST", body: { answers } });
+        closeDialog();
+        toast(`${(current.added || []).length} puce(s) ajoutée(s)`);
+        render();
+      } catch (error) { document.querySelector("#coachResult").textContent = error.message; throw error; }
+    });
   }
 
   async function load() {

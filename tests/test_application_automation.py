@@ -103,14 +103,16 @@ def test_factual_answer_requires_confidence_source_and_existing_option(monkeypat
     assert not adapters.ai_plan({"values": [], "interventions": [pending], "ready": False}, professional, {})["ready"]
 
 
-def test_memory_ignores_sensitive_and_existing_answers(data_dir) -> None:
+def test_memory_versions_answers_and_ignores_sensitive_ones(data_dir) -> None:
     current = profile.empty_profile()
     current["standard_answers"] = {"old": {"question": "Préavis", "answer": "Deux mois"}}
     profile.save_profile(current)
     profile.remember_form_answers([{"label": "Préavis", "value": "Un mois"},
                                    {"label": "Handicap", "value": "Non", "sensitive": True}])
     saved = profile.load_profile()["standard_answers"]
-    assert len(saved) == 1 and saved["old"]["answer"] == "Deux mois"
+    # Même question, nouvelle réponse : nouvelle version, l'ancienne rejoint l'historique ; le sensible est ignoré.
+    assert list(saved) == ["old"] and saved["old"]["answer"] == "Un mois"
+    assert saved["old"]["history"][0]["answer"] == "Deux mois" and saved["old"]["validated_at"]
 
 
 def test_credentials_match_only_exact_host_or_subdomain(monkeypatch) -> None:

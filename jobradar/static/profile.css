@@ -16,3 +16,7 @@
 .profile-version-card dl div { display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); padding: 6px; }
 @media (max-width: 980px) { .profile-layout { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .profile-source, .profile-item-head, .profile-versions > div { align-items: flex-start; flex-direction: column; } }
+.answer-state { display: block; margin-top: 4px; color: var(--muted); font-size: .82em; }
+.answer-expired { color: var(--mid); }
+.coach-list { list-style: none; padding: 0; display: grid; gap: 8px; margin: 8px 0; }
+.coach-list li { padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 6px; }
