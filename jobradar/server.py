@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -34,6 +34,7 @@ from . import (
     preparation,
     profile,
     tailoring,
+    vault,
     workflow,
 )
 from .config import load_config, settings
@@ -67,6 +68,73 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="JobRadar", lifespan=lifespan)
+
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+@app.middleware("http")
+async def local_requests_only(request: Request, call_next):
+    """Une requête qui modifie des données doit viser JobRadar en local et venir de sa propre page.
+
+    Bloque une page web malveillante (Origin étrangère) et le DNS rebinding (Host étranger).
+    """
+    if request.method not in SAFE_METHODS:
+        host = urlsplit(f"//{request.headers.get('host') or ''}").hostname or ""
+        origin = request.headers.get("origin")
+        origin_host = urlsplit(origin).hostname if origin and origin != "null" else None
+        if host not in LOCAL_HOSTS or (origin is not None and origin_host not in LOCAL_HOSTS):
+            return JSONResponse({"detail": "Requête refusée : elle ne vient pas de JobRadar en local."},
+                                status_code=403)
+    return await call_next(request)
+
+
+class ConsentIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    consent: StrictBool
+
+
+class RecoveryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    recovery_key: str = Field(min_length=20, max_length=200)
+
+
+@app.get("/api/vault")
+def vault_status():
+    return vault.status()
+
+
+@app.post("/api/vault/init")
+def vault_init():
+    try:
+        return {"recovery_key": vault.init()} | vault.status()
+    except vault.VaultError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.post("/api/vault/confirm-recovery")
+def vault_confirm_recovery():
+    return vault.confirm_recovery()
+
+
+@app.post("/api/vault/unlock")
+def vault_unlock(body: RecoveryIn):
+    try:
+        vault.unlock_with_recovery(body.recovery_key)
+    except vault.VaultError as exc:
+        raise HTTPException(400, str(exc))
+    return vault.status()
+
+
+@app.post("/api/vault/lock")
+def vault_lock():
+    vault.lock()
+    return vault.status()
+
+
+@app.put("/api/vault/consent")
+def vault_consent(body: ConsentIn):
+    return vault.set_cv_consent(body.consent)
 
 ApplicationStatus = Literal[
     "consultee", "envoyee", "relance", "entretien_rh", "entretien_tech", "retenu", "refuse", "abandon"

@@ -277,7 +277,7 @@ def client(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
         def request(method: str, url: str, **kwargs):
             async def send():
                 transport = httpx.ASGITransport(app=server.app)
-                async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as session:
+                async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as session:
                     return await session.request(method, url, **kwargs)
 
             return asyncio.run(send())
