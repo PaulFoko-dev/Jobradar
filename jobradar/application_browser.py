@@ -880,6 +880,52 @@ def _apply_email_verification(page, domains: set[str], since, used: set, supervi
     return False
 
 
+ACCOUNT_BUTTON = re.compile(r"^\s*(create account|cr[ée]er (mon |un )?compte|s'inscrire|sign up|register|"
+                            r"créer mon espace|valider l'inscription)\s*$", re.I)
+TERMS_WORDS = ("conditions", "terms", "cgu", "politique de confidentialite", "privacy", "j accepte", "i agree")
+
+
+def _create_account(page, supervision) -> bool:
+    """Option « comptes automatiques » : e-mail du profil, mot de passe fort généré et rangé pour CE domaine,
+    conditions d'utilisation du compte acceptées (jamais une newsletter), puis clic sur « Créer un compte »."""
+    import secrets
+    import string
+
+    host = (urlsplit(page.url).hostname or "")
+    email = supervision.values.get("email")
+    if not host or not email:
+        return False
+    try:
+        passwords = page.locator('input[type="password"]')
+        if not passwords.count():
+            return False
+        alphabet = string.ascii_letters + string.digits + "!#%+-=?@_"
+        password = "".join(secrets.choice(alphabet) for _ in range(20)) + "Aa1!"
+        for field in page.locator('input[type="email"], input[autocomplete="username"], input[name*="mail" i]').all():
+            if field.is_visible() and field.is_editable() and not field.input_value():
+                field.fill(email)
+        for index in range(passwords.count()):
+            if passwords.nth(index).is_visible():
+                passwords.nth(index).fill(password)
+        for box in page.locator('input[type="checkbox"]').all():
+            label = application_adapters._fold(box.evaluate(
+                "el => (el.closest('label')?.innerText || el.getAttribute('aria-label') || "
+                "(el.id && document.querySelector(`label[for=\"${el.id}\"]`)?.innerText) || '')"))
+            if box.is_visible() and any(word in label for word in TERMS_WORDS) and not any(
+                    word in label for word in application_adapters.NEWSLETTER_WORDS):
+                box.set_checked(True)
+        button = page.get_by_role("button", name=ACCOUNT_BUTTON)
+        if not button.count():
+            return False
+        login_credentials.store(host, email, password)  # rangé avant le clic : jamais un compte orphelin
+        button.first.click(timeout=10_000)
+        page.wait_for_timeout(2_000)
+        supervision.journal.note(f"Compte créé automatiquement sur {host} (mot de passe rangé pour ce seul domaine).")
+        return True
+    except PlaywrightError:
+        return False
+
+
 def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
     """Étape humaine (connexion, compte, captcha, code e-mail) : JobRadar surveille et reprend seul.
 
@@ -889,6 +935,8 @@ def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
     """
     minutes = config.browser_settings()["human_wait_minutes"]
     deadline = time.monotonic() + minutes * 60
+    if kind == "account_creation" and config.browser_settings().get("auto_accounts") and _create_account(page, supervision):
+        kind = "login"  # la suite (code de vérification, connexion) se poursuit comme une connexion
     filled = _prefill_known(page, supervision, login=kind == "login") if kind in {"login", "account_creation"} else []
     message = (f"{HUMAN_STEP_MESSAGES.get(kind, HUMAN_STEP_MESSAGES['login'])[:1].upper()}"
                f"{HUMAN_STEP_MESSAGES.get(kind, HUMAN_STEP_MESSAGES['login'])[1:]} : JobRadar reprend tout seul "

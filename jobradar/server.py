@@ -1286,6 +1286,7 @@ class BrowserSettingsIn(BaseModel):
     keep_open: StrictBool | None = None
     ai_supervision: Literal["always", "fallback", "off"] | None = None
     human_wait_minutes: StrictInt | None = Field(None, ge=1, le=60)
+    auto_accounts: StrictBool | None = None
 
 
 class LoginIn(BaseModel):

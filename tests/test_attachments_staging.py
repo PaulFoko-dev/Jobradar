@@ -131,3 +131,36 @@ def test_a_save_and_continue_submit_button_is_a_step_not_the_final_send() -> Non
         page.set_content('<form><button type="submit">Envoyer ma candidature</button></form>')
         assert application_browser._step_button(page.locator("form"), page) is None
         browser.close()
+
+
+def test_account_is_created_automatically_and_its_password_stored_for_that_site_only(monkeypatch) -> None:
+    from playwright.sync_api import sync_playwright
+
+    stored = []
+    monkeypatch.setattr(application_browser.login_credentials, "store",
+                        lambda domain, user, password: stored.append((domain, user, len(password))))
+
+    class Journal:
+        def note(self, _text):
+            pass
+
+    supervision = type("S", (), {"values": {"email": "camille@example.test"}, "journal": Journal()})()
+    form = """<form onsubmit="event.preventDefault(); document.body.dataset.done = '1'">
+      <label for="m">Email Address</label><input id="m" type="email">
+      <label for="p">Password</label><input id="p" type="password">
+      <label for="v">Verify New Password</label><input id="v" type="password">
+      <label><input type="checkbox" id="t"> I agree to the terms and conditions</label>
+      <label><input type="checkbox" id="n"> Recevoir la newsletter</label>
+      <button type="submit">Create Account</button></form>"""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.route("https://acme.wd3.myworkdayjobs.com/**", lambda route: route.fulfill(body=form, content_type="text/html"))
+        page.goto("https://acme.wd3.myworkdayjobs.com/fr/login")
+        assert application_browser._create_account(page, supervision)
+        assert page.input_value("#m") == "camille@example.test"
+        assert page.input_value("#p") == page.input_value("#v") and len(page.input_value("#p")) >= 20
+        assert page.is_checked("#t") and not page.is_checked("#n")
+        assert page.evaluate("document.body.dataset.done") == "1"
+        browser.close()
+    assert stored == [("acme.wd3.myworkdayjobs.com", "camille@example.test", 24)]
