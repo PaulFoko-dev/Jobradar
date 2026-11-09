@@ -104,6 +104,37 @@ def test_index_retrouve_un_intitule_long_identique_sur_un_autre_site() -> None:
     assert index.find(republication) == ("cle-originale", 7)
 
 
+def test_index_rapproche_deux_noms_d_une_meme_entreprise() -> None:
+    index = DedupIndex()
+    index.add(offre(title="Stage Ingénieur - cybersécurité applicative (H/F)", company="HGH Systèmes Infrarouges",
+                    location="Igny, A8, France"), "hgh", oid=32)
+
+    assert index.find(offre(title="Stage Ingénieur - cybersécurité applicative (H/F)",
+                            company="HGH Infrared Systems", location="Igny, Île-de-France, France")) == ("hgh", 32)
+    # Même racine mais autre poste, ou autre ville : offres distinctes.
+    assert index.find(offre(title="Stage Ingénieur - sécurité réseau (H/F)", company="HGH Infrared Systems",
+                            location="Igny")) is None
+    assert index.find(offre(title="Stage Ingénieur - cybersécurité applicative (H/F)",
+                            company="HGH Infrared Systems", location="Lyon")) is None
+
+
+def test_un_premier_mot_generique_ne_rapproche_pas_deux_entreprises() -> None:
+    index = DedupIndex()
+    index.add(offre(title="Stage analyste SOC", company="Crédit Agricole", location="Paris"), "ca", oid=1)
+    assert index.find(offre(title="Stage analyste SOC", company="Crédit Mutuel", location="Paris")) is None
+
+
+def test_index_retrouve_l_offre_d_origine_republiee_par_un_site_relais() -> None:
+    index = DedupIndex()
+    index.add(offre(title="Stage - Audits techniques et tests d'intrusion", company="Wavestone"), "wave", oid=9)
+
+    relais = offre(title="Stage - Audits techniques et tests d'intrusion (H/F)", company="Groupe Talents Handicap")
+    assert index.find(relais) == ("wave", 9)
+    # Sans site relais, deux entreprises différentes avec un intitulé court restent distinctes.
+    index.add(offre(title="Stage analyste SOC junior", company="Entreprise A"), "a", oid=1)
+    assert index.find(offre(title="Stage analyste SOC junior", company="Entreprise B")) is None
+
+
 
 def test_les_offres_les_plus_recentes_sont_analysees_en_premier(criteres_stage: dict) -> None:
     pertinente_ancienne = {"title": "Stage analyste SOC", "description": "", "date_posted": "2026-09-01"}

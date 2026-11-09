@@ -125,6 +125,32 @@ def similar(a: frozenset, b: frozenset) -> bool:
     return len(a & b) / len(a | b) >= 0.8
 
 
+# Sites qui republient les offres d'autres entreprises sous leur propre nom (Talents Handicap republie
+# Sopra Steria ou Wavestone) : leur nom d'entreprise ne dit rien de l'employeur réel.
+RELAY_COMPANIES = {"talents handicap", "handicap job", "hellowork", "jobijoba", "meteojob", "jooble", "talent com",
+                   "optioncarriere", "jobteaser", "indeed", "linkedin"}
+
+
+def is_relay(company: str | None) -> bool:
+    return company_key(company) in RELAY_COMPANIES
+
+
+# Premiers mots partagés par des entreprises sans lien (« Crédit Agricole » / « Crédit Mutuel »).
+GENERIC_ROOTS = {"credit", "banque", "caisse", "societe", "compagnie", "entreprise", "agence", "cabinet", "institut",
+                 "centre", "universite", "ecole", "ministere", "air", "laboratoire", "services", "solutions",
+                 "consulting", "conseil", "digital", "tech", "global", "international", "le", "la", "les", "l"}
+
+
+def company_root(company: str | None) -> str:
+    """Premier mot distinctif : « HGH Systèmes Infrarouges » et « HGH Infrared Systems » -> « hgh »."""
+    words = company_key(company).split()
+    return words[0] if words and len(words[0]) >= 3 and words[0] not in GENERIC_ROOTS else ""
+
+
+def _city(o: dict) -> str:
+    return norm((o.get("location") or "").split(",")[0])
+
+
 class DedupIndex:
     """Retrouve une offre déjà connue de la même entreprise avec un intitulé quasi identique
     (« Stage Ingénieur(e) Réseau Sécurité - DSI » ≈ « Stage Ingénieur Réseau Sécurité - Dsi H/F »)."""
@@ -132,22 +158,40 @@ class DedupIndex:
     # Une offre republiée par un cabinet ou un jobboard apparaît sous un autre nom d'entreprise :
     # au-delà de ce nombre de mots significatifs, un intitulé identique suffit.
     SAME_TITLE_MIN_TOKENS = 4
+    # Un site relais (RELAY_COMPANIES) ne nomme pas l'employeur : un intitulé proche suffit dès 3 mots.
+    RELAY_MIN_TOKENS = 3
 
     def __init__(self):
         self._by_company: dict[str, list[tuple[frozenset, str, int | None]]] = {}
+        self._by_root: dict[str, list[tuple[frozenset, str, str, int | None]]] = {}
         self._by_title: dict[frozenset, tuple[str, int | None]] = {}
+        self._all: list[tuple[frozenset, bool, str, int | None]] = []
 
     def find(self, o: dict) -> tuple[str, int | None] | None:
         tokens = title_tokens(o["title"])
         for other, key, oid in self._by_company.get(company_key(o.get("company")), []):
             if similar(tokens, other):
                 return key, oid
-        if len(tokens) >= self.SAME_TITLE_MIN_TOKENS:
-            return self._by_title.get(tokens)
+        # Variantes d'un même nom (langue, filiale) : même racine, même ville et intitulé identique.
+        root, city = company_root(o.get("company")), _city(o)
+        if root and city and len(tokens) >= 2:
+            for other, other_city, key, oid in self._by_root.get(root, []):
+                if tokens == other and city == other_city:
+                    return key, oid
+        if len(tokens) >= self.SAME_TITLE_MIN_TOKENS and tokens in self._by_title:
+            return self._by_title[tokens]
+        if len(tokens) >= self.RELAY_MIN_TOKENS:
+            relay = is_relay(o.get("company"))
+            for other, other_relay, key, oid in self._all:
+                if (relay or other_relay) and len(other) >= self.RELAY_MIN_TOKENS and similar(tokens, other):
+                    return key, oid
         return None
 
     def add(self, o: dict, key: str, oid: int | None = None):
         tokens = title_tokens(o["title"])
         self._by_company.setdefault(company_key(o.get("company")), []).append((tokens, key, oid))
+        if root := company_root(o.get("company")):
+            self._by_root.setdefault(root, []).append((tokens, _city(o), key, oid))
         if len(tokens) >= self.SAME_TITLE_MIN_TOKENS:
             self._by_title.setdefault(tokens, (key, oid))
+        self._all.append((tokens, is_relay(o.get("company")), key, oid))
