@@ -398,7 +398,8 @@ def test_prepare_and_answers_routes(client, monkeypatch):
     job = prepare_in_background(client, application["id"], {"kinds": ["cv"], "base_cv": "src-1"})
     assert job["status"] == "done", job
     body = job["result"]
-    assert set(body) == {"session", "composition", "letter", "questions", "suggested_bases", "notes"}
+    assert set(body) == {"session", "composition", "letter", "questions", "suggested_bases", "notes",
+                         "explanation"}
 
     answered = client.post(f"/api/applications/{application['id']}/documents/answers",
                            json={"session": body["session"], "skills": [{"name": "Sentinel", "status": "inconnu"}]})
