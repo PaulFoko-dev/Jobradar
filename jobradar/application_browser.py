@@ -275,7 +275,78 @@ def _paste_resume(plan: dict, files: dict) -> dict:
             "ready": not interventions}
 
 
-NEXT_LABELS = re.compile(r"^\s*(next|suivant|continuer|continue|save and continue|étape suivante)\s*$", re.I)
+NEXT_LABELS = re.compile(
+    r"^\s*(next|suivant|continuer|continue|save (?:and|&) continue|étape suivante|"
+    r"(?:sauvegarder|enregistrer|valider) et continuer|(?:sauvegarder|enregistrer|valider) et passer à l'étape suivante)"
+    r"\s*$", re.I)
+
+# Dépôt en deux temps (Société Générale, Taleo, SAP SuccessFactors…) : choisir le fichier ne suffit pas,
+# un bouton « Joindre » l'envoie, puis une ligne du tableau des pièces jointes doit être cochée.
+ATTACH_WORDS = ("joindre", "attach", "upload", "televerser", "telecharger le fichier", "ajouter le fichier",
+                "ajouter ce fichier", "ajouter le document", "ajouter la piece", "importer", "charger le fichier",
+                "valider le fichier", "envoyer le fichier", "add file", "add attachment")
+ATTACH_EXCLUDED = ("suivant", "continuer", "candidature", "postuler", "soumettre", "submit", "abandonner",
+                   "supprimer", "brouillon", "linkedin", "experience", "formation", "langue", "annuler")
+FILE_COMMENTS = {"cv": "CV", "lettre": "Lettre de motivation"}
+
+STAGE_BUTTON_JS = r"""(input, words) => {
+  const fold = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const visible = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  document.querySelectorAll('[data-jobradar-attach],[data-jobradar-attach-comment]').forEach(el => {
+    el.removeAttribute('data-jobradar-attach'); el.removeAttribute('data-jobradar-attach-comment'); });
+  let node = input.parentElement;
+  for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+    const buttons = [...node.querySelectorAll(
+      'button, input[type=button], input[type=submit], a[role=button], [role=button], a.btn, a.button')]
+      .filter(el => el !== input && visible(el));
+    const hit = buttons.find(el => {
+      const text = fold(el.innerText || el.value || el.getAttribute('aria-label'));
+      return text && text.length < 40 && words.attach.some(w => text.includes(w))
+        && !words.excluded.some(w => text.includes(w));
+    });
+    if (hit) {
+      hit.setAttribute('data-jobradar-attach', '1');
+      const comment = [...node.querySelectorAll('input[type=text], input:not([type]), textarea')].find(el =>
+        visible(el) && /comment|description|libell/i.test(
+          fold(`${el.placeholder || ''} ${el.getAttribute('aria-label') || ''} ${el.name || ''} ${el.id || ''}`)));
+      if (comment) comment.setAttribute('data-jobradar-attach-comment', '1');
+      return true;
+    }
+    if (node.tagName === 'FORM') break;
+  }
+  return false;
+}"""
+
+# Tableau des pièces jointes : coche « Joindre » pour nos fichiers, « CV » / « Lettre » selon leur rôle, et décoche
+# les anciens documents du compte (CV adapté à une autre entreprise) dès que le tableau contient nos fichiers.
+MARK_ATTACHMENTS_JS = r"""(entries) => {
+  const fold = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  document.querySelectorAll('[data-jobradar-attach-box]').forEach(el => el.removeAttribute('data-jobradar-attach-box'));
+  let marked = 0;
+  for (const table of document.querySelectorAll('table')) {
+    const headRow = table.querySelector('thead tr') || table.querySelector('tr');
+    if (!headRow) continue;
+    const headers = [...headRow.children].map(cell => fold(cell.innerText));
+    const rows = [...table.querySelectorAll('tr')].filter(row => row !== headRow);
+    if (!rows.some(row => entries.some(entry => row.innerText.includes(entry.name)))) continue;
+    for (const row of rows) {
+      const entry = entries.find(item => row.innerText.includes(item.name));
+      [...row.children].forEach((cell, index) => {
+        const box = cell.querySelector('input[type=checkbox]');
+        const header = headers[index] || '';
+        if (!box) return;
+        let want = null;
+        if (/joindre|attach|inclure|include|selection|utiliser|envoyer/.test(header)) want = Boolean(entry);
+        else if (/^cv$|resume|curriculum/.test(header)) want = Boolean(entry) && entry.role === 'cv';
+        else if (/lettre|cover|motivation/.test(header)) want = Boolean(entry) && entry.role === 'lettre';
+        if (want === null) return;
+        box.setAttribute('data-jobradar-attach-box', want ? '1' : '0');
+        marked += 1;
+      });
+    }
+  }
+  return marked;
+}"""
 
 
 def _settle(page) -> None:
@@ -331,6 +402,105 @@ def _fill(root, plan: dict) -> list[dict]:
                     pass
             issues.append({"label": item["label"], "reason": "remplissage impossible"})
     return issues
+
+
+def _button_text(button) -> str:
+    try:
+        return " ".join((button.inner_text(timeout=1_000) or button.get_attribute("value") or "").split())
+    except PlaywrightError:
+        return ""
+
+
+def _is_step_button(button) -> bool:
+    """« Suivant », « Sauvegarder et continuer » : avance d'une étape, n'envoie jamais la candidature."""
+    return bool(NEXT_LABELS.match(_button_text(button)))
+
+
+def _step_button(form, page):
+    """Bouton d'étape visible du formulaire (sinon de la page), ou None s'il n'y en a pas."""
+    for root in (form, page):
+        try:
+            buttons = root.locator("button, input[type=submit], input[type=button], [role=button]")
+            for index in range(min(buttons.count(), 60)):
+                button = buttons.nth(index)
+                if button.is_visible() and _is_step_button(button):
+                    return button
+        except PlaywrightError:
+            continue
+    return None
+
+
+def _file_listed(page, name: str) -> bool:
+    try:
+        return name in page.locator("body").inner_text(timeout=3_000)
+    except PlaywrightError:
+        return False
+
+
+def _stage_one(page, root, selector: str, path: str, role: str) -> str:
+    """Dépose ``path`` via un dépôt en deux temps ; renvoie « listed », « no_button » ou « timeout »."""
+    name = Path(path).name
+    upload = root.locator(selector).first
+    if not upload.count() or not upload.evaluate(STAGE_BUTTON_JS, {"attach": ATTACH_WORDS,
+                                                                    "excluded": ATTACH_EXCLUDED}):
+        return "no_button"
+    if _file_listed(page, name):
+        upload.set_input_files([])  # déjà joint (étape reprise) : jamais une seconde copie
+        return "listed"
+    upload.set_input_files(path)  # le champ peut encore contenir le fichier précédent (CV avant la lettre)
+    comment = page.locator("[data-jobradar-attach-comment]")
+    if comment.count():
+        try:
+            comment.first.fill(FILE_COMMENTS.get(role, ""), timeout=3_000)
+        except PlaywrightError:
+            pass
+    page.locator("[data-jobradar-attach]").first.click(timeout=10_000)
+    try:
+        page.wait_for_function("name => document.body.innerText.includes(name)", arg=name, timeout=45_000)
+    except PlaywrightError:
+        return "timeout"
+    _settle(page)
+    return "listed"
+
+
+def _stage_attachments(page, root, plan: dict, files: dict, journal=None) -> list[str]:
+    """Pièces jointes en deux temps : « Joindre » chaque fichier, puis cocher les bonnes lignes du tableau.
+
+    Le CV passe par le champ prévu par le plan ; la lettre, si aucun champ ne lui est dédié, réutilise le même
+    dépôt générique (« Pièces jointes », « Autres documents »). Renvoie les fichiers joints.
+    """
+    entries, staged = [], []
+    file_items = [item for item in plan["values"] if item["kind"] == "file"]
+    for item in file_items:
+        role = "lettre" if item.get("source") == "document:lettre" else "cv"
+        outcome = _stage_one(page, root, item["selector"], item["value"], role)
+        if outcome == "no_button":
+            continue
+        entries.append({"name": Path(item["value"]).name, "role": role})
+        if outcome == "listed":
+            staged.append(role)
+        elif journal is not None:
+            journal.note(f"Pièce jointe {role} : le fichier n'est pas apparu dans la liste après « Joindre ».")
+        if role == "cv" and files.get("lettre") and not any(
+                other.get("source") == "document:lettre" for other in file_items):
+            # Dépôt générique : la lettre suit le CV par le même champ, le site les liste l'un sous l'autre.
+            _retag(root, plan)  # « Joindre » recharge souvent la page : les repères des champs sont reposés
+            if _stage_one(page, root, item["selector"], files["lettre"], "lettre") == "listed":
+                entries.append({"name": Path(files["lettre"]).name, "role": "lettre"})
+                staged.append("lettre")
+    if entries:
+        try:
+            if page.evaluate(MARK_ATTACHMENTS_JS, entries):
+                for want, checked in (("1", True), ("0", False)):
+                    boxes = page.locator(f'[data-jobradar-attach-box="{want}"]')
+                    for index in range(boxes.count()):
+                        boxes.nth(index).set_checked(checked, timeout=5_000)
+        except PlaywrightError as exc:
+            if journal is not None:
+                journal.note(f"Cases du tableau des pièces jointes non cochées : {exc}")
+    if journal is not None and staged:
+        journal.note("Pièces jointes déposées puis jointes : " + ", ".join(staged))
+    return staged
 
 
 def _verify_filled(root, plan: dict) -> list[dict]:
@@ -1910,6 +2080,7 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
             supervision.journal.note("Suggestion d'adresse Welcome to the Jungle validée.")
         if any(item["kind"] == "file" for item in plan["values"]):
             _settle(page)  # le site analyse souvent le CV déposé avant d'accepter la suite (Phenom, Workday)
+            _stage_attachments(page, form, plan, files, supervision.journal)
         verification_issues = _verify_filled(form, plan)
         if verification_issues:
             # Champ vidé par un nouveau rendu de la page : une seule nouvelle saisie des champs en écart.
@@ -1941,6 +2112,13 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
                           fields=plan["interventions"], preview=_preview(combined), step=step + 1)
             return None
         if provider != "workday":
+            if not designated or (designated[0] == "submit" and _is_step_button(designated[1])):
+                # « Sauvegarder et continuer » est souvent un button[type=submit] : sans ce contrôle il serait pris
+                # pour l'envoi final, marqué cliqué, et la candidature finirait en « confirmation manquante ».
+                step_button = _step_button(form, page)
+                if step_button is not None:
+                    designated = ("next_step", step_button)
+                    supervision.journal.note("Bouton d'étape reconnu (« Continuer ») : passage à l'étape suivante.")
             if designated and designated[0] == "next_step":
                 # Formulaire en plusieurs étapes : « Suivant » n'envoie rien, on passe à l'étape suivante.
                 before = application_supervisor.snapshot(page)["hash"]
