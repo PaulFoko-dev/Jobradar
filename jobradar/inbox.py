@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
+from urllib.parse import urlsplit
 
 from . import config, db, mailer
 from .sources.common import norm
@@ -155,16 +156,43 @@ def scan(messages: list[dict] | None = None) -> dict:
 CODE = re.compile(r"(?<![\d-])(\d{6}|\d{4}|\d{8})(?![\d-])")
 LINK = re.compile(r"https?://[^\s\"'<>]+")
 VERIFY_WORDS = ("verif", "verify", "confirm", "activate", "activation", "valid", "token", "otp")
+# Domaines « co.uk », « com.au »… : trop larges pour désigner un site, ils ne valident aucun message.
+BROAD_SECOND_LEVEL = {"ac", "co", "com", "edu", "gouv", "gov", "net", "org"}
+
+
+def _site_domains(domains: set[str]) -> set[str]:
+    cleaned = {domain.strip(".").lower() for domain in domains if domain}
+    return {domain for domain in cleaned
+            if "." in domain and not (domain.count(".") == 1 and domain.split(".")[0] in BROAD_SECOND_LEVEL)}
+
+
+def _on_site(host: str, domains: set[str]) -> bool:
+    """Hôte égal à un domaine du site ou sous-domaine de celui-ci ; jamais une simple inclusion de texte."""
+    host = host.lower().rstrip(".")
+    return any(host == domain or host.endswith("." + domain) for domain in domains)
+
+
+def _host(link: str) -> str:
+    try:
+        return urlsplit(link).hostname or ""
+    except ValueError:  # URL mal formée (crochets, port invalide) : jamais retenue
+        return ""
 
 
 def extract_verification(message: dict, domains: set[str]) -> dict | None:
-    """Code ou lien de vérification d'un message envoyé par le site de candidature (lecture locale)."""
+    """Code ou lien de vérification d'un message envoyé par le site de candidature (lecture locale).
+
+    L'expéditeur et l'hôte du lien sont comparés au domaine exact du site : « fauxworkday.com » ou
+    « pirate.example/?r=myworkdayjobs.com » ne passent pas. Le robot n'ouvre ainsi qu'un lien du site.
+    """
+    domains = _site_domains(domains)
+    if not domains:
+        return None
     sender = parseaddr(message["from"])[1].lower()
     body = message["body"]
-    sender_ok = any(sender.endswith(domain) for domain in domains if domain)
-    links = [link.rstrip(".,);") for link in LINK.findall(body)
-             if any(word in link.lower() for word in VERIFY_WORDS)
-             and any(domain in link.lower() for domain in domains if domain)]
+    sender_ok = "@" in sender and _on_site(sender.rsplit("@", 1)[1], domains)
+    links = [link for link in (found.rstrip(".,);") for found in LINK.findall(body))
+             if any(word in link.lower() for word in VERIFY_WORDS) and _on_site(_host(link), domains)]
     text = norm(f"{message['subject']} {body}")
     code = None
     if any(word in text for word in ("code", "verification", "otp", "one time")):

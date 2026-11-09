@@ -59,6 +59,29 @@ def test_verification_code_and_link_are_extracted_only_from_the_site() -> None:
     assert inbox.extract_verification(other, domains) is None
 
 
+@pytest.mark.parametrize("message", [
+    # lien hors du site qui cite seulement le domaine dans son chemin ou ses paramètres
+    {"from": "Support <help@pirate.example>", "subject": "Vérifiez votre compte",
+     "body": "https://pirate.example/verify?r=myworkdayjobs.com"},
+    {"from": "Support <help@pirate.example>", "subject": "Activez votre compte",
+     "body": "https://pirate.example/myworkdayjobs.com/activate"},
+    # domaine du site en identifiant, vrai hôte après « @ »
+    {"from": "Support <help@pirate.example>", "subject": "Activez votre compte",
+     "body": "https://myworkdayjobs.com@pirate.example/activate"},
+    # expéditeur dont le domaine se termine seulement par le même texte
+    {"from": "Workday <noreply@fauxmyworkdayjobs.com>", "subject": "Votre code de vérification",
+     "body": "Votre code de vérification est 482913."},
+])
+def test_verification_ignores_look_alike_senders_and_links(message) -> None:
+    assert inbox.extract_verification(message, {"myworkdayjobs.com"}) is None
+
+
+def test_verification_ignores_domains_too_broad_to_name_a_site() -> None:
+    message = {"from": "Shop <noreply@shop.co.uk>", "subject": "Votre code de vérification", "body": "Code 482913"}
+    assert inbox.extract_verification(message, {"co.uk", ""}) is None
+    assert inbox.extract_verification(message, {"shop.co.uk"}) == {"code": "482913", "link": None}
+
+
 def test_robot_types_the_verification_code_received_by_email(monkeypatch) -> None:
     from playwright.sync_api import sync_playwright
 
