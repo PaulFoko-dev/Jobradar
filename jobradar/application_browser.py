@@ -30,6 +30,7 @@ from . import (
     db,
     login_credentials,
     notifications,
+    playbooks,
     private_io,
     profile,
     tailoring,
@@ -2136,6 +2137,9 @@ def _locate(page, attempt: dict, provider: str, step: int, supervision: _Supervi
 def _supervise_form(form, page, plan: dict, supervision: _Supervision, files: dict, cache: dict,
                     candidate: dict, application: dict, letter_text: str, lang: str):
     """Résout avec l'IA les champs obligatoires restés sans réponse ; renvoie (plan, bouton désigné)."""
+    plan, remembered = playbooks.apply(page.url, plan, supervision.values)
+    if remembered:
+        supervision.journal.note("Champs déjà connus sur ce site, remplis sans IA : " + ", ".join(remembered)[:300])
     pending = [item for item in plan["interventions"] if item.get("kind") != "sensitive"]
     needs_button = not any(form.locator(selector).count() for selector in SUBMIT_SELECTORS["generic"])
     if supervision.mode == "off" or (supervision.mode == "fallback" and not pending and not needs_button):
@@ -2336,6 +2340,11 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
             _fill(form, {"values": [item for item in plan["values"] if item["label"] in labels]})
             verification_issues = _verify_filled(form, plan)
         collected.update({item["selector"]: item for item in plan["values"]})
+        if not verification_issues:
+            # Associations confirmées par la relecture : retenues pour ce site (libellé -> clé, jamais la valeur).
+            playbooks.remember(page.url, {item["label"]: item["source"].split(":", 1)[1] for item in plan["values"]
+                                          if str(item.get("source") or "").startswith("ia-superviseur:")
+                                          and item["source"].split(":", 1)[1] in supervision.values})
         combined = {"values": list(collected.values()), "interventions": plan["interventions"],
                     "ready": plan["ready"]}
         if verification_issues:
