@@ -21,6 +21,7 @@ from . import (
     application_flow,
     application_queue,
     archive,
+    auth,
     config,
     contacts,
     db,
@@ -97,7 +98,70 @@ async def local_requests_only(request: Request, call_next):
         if host not in LOCAL_HOSTS or (origin is not None and origin_host not in LOCAL_HOSTS):
             return JSONResponse({"detail": "Requête refusée : elle ne vient pas de JobRadar en local."},
                                 status_code=403)
+    path = request.url.path
+    if path.startswith("/api/") and not path.startswith("/api/auth/") and auth.account_exists() \
+            and auth.session_user(request.cookies.get(auth.COOKIE)) is None:
+        return JSONResponse({"detail": "Connexion requise."}, status_code=401)
     return await call_next(request)
+
+
+class AuthIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current: str = Field(max_length=256)
+    new: str = Field(min_length=1, max_length=256)
+
+
+def _with_session(token: str | None) -> JSONResponse:
+    response = JSONResponse({"account": True, "authenticated": token is not None, "username": auth.username()})
+    if token is None:
+        response.delete_cookie(auth.COOKIE, path="/")
+    else:
+        response.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True,
+                            samesite="strict", path="/")
+    return response
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    user = auth.session_user(request.cookies.get(auth.COOKIE))
+    return {"account": auth.account_exists(), "authenticated": user is not None, "username": user}
+
+
+@app.post("/api/auth/setup")
+def auth_setup(body: AuthIn):
+    try:
+        return _with_session(auth.create_account(body.username.strip(), body.password))
+    except auth.AuthError as exc:
+        raise HTTPException(409 if auth.account_exists() else 400, str(exc))
+
+
+@app.post("/api/auth/login")
+def auth_login(body: AuthIn):
+    try:
+        return _with_session(auth.login(body.username.strip(), body.password))
+    except auth.AuthError as exc:
+        raise HTTPException(401, str(exc))
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    return _with_session(None)
+
+
+@app.put("/api/auth/password")
+def auth_password(body: PasswordIn, request: Request):
+    if auth.session_user(request.cookies.get(auth.COOKIE)) is None:
+        raise HTTPException(401, "Connexion requise.")
+    try:
+        return _with_session(auth.change_password(body.current, body.new))
+    except auth.AuthError as exc:
+        raise HTTPException(400, str(exc))
 
 
 def _private_file(path: Path, media_type: str, *, inline: bool) -> Response:

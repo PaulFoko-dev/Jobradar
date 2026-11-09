@@ -142,6 +142,15 @@ dans `"models"` ; une chaîne vide utilise le modèle par défaut de l'assistant
 
 ## 🧭 Utilisation
 
+Au premier lancement, JobRadar propose de **créer ton compte local** (identifiant et mot de passe, qui protègent l'accès
+à l'application sur cet ordinateur), puis lance une **visite guidée** qui te montre chaque partie de l'interface. Elle se
+rouvre à tout moment avec le bouton **Guide** ou depuis le menu de ton compte (avatar en haut à droite : profil,
+réglages, connexion Google, mot de passe, déconnexion). L'écran **Aujourd'hui** regroupe ensuite chaque jour ce qui
+demande ton attention.
+
+> 💡 Connecte un compte Google dans le navigateur de JobRadar (Réglages → Candidatures → « Connecter un compte
+> Google ») : quand un site propose « Continuer avec Google », le robot s'en sert pour se connecter à ta place.
+
 1. **+ Nouvelle recherche** : remplis le formulaire et/ou décris ta recherche, puis clique sur **Analyser**.
 2. **Vérifie les critères proposés** : supprime ou ajoute des requêtes, des mots-clés ou des zones (touche Entrée pour ajouter).
 3. **Enregistrer et lancer la recherche** : la collecte prend 15 à 30 minutes (les robots marquent des

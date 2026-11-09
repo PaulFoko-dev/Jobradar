@@ -271,14 +271,19 @@ def client(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(anyio.to_thread, "run_sync", run_sync_inline)
 
     class LocalClient:
-        """Client synchrone minimal au-dessus d'ASGITransport, sans portail AnyIO."""
+        """Client synchrone minimal au-dessus d'ASGITransport, sans portail AnyIO ; garde les cookies (session)."""
 
-        @staticmethod
-        def request(method: str, url: str, **kwargs):
+        def __init__(self):
+            self.cookies = httpx.Cookies()
+
+        def request(self, method: str, url: str, **kwargs):
             async def send():
                 transport = httpx.ASGITransport(app=server.app)
-                async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765") as session:
-                    return await session.request(method, url, **kwargs)
+                async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8765",
+                                             cookies=self.cookies) as session:
+                    response = await session.request(method, url, **kwargs)
+                    self.cookies = httpx.Cookies(session.cookies)
+                    return response
 
             return asyncio.run(send())
 

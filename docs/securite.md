@@ -16,6 +16,16 @@ pas l'être.
 
 Hors périmètre : un logiciel malveillant qui s'exécute avec ton compte pendant que JobRadar est déverrouillé.
 
+## Connexion à l'application
+
+- Compte local unique : identifiant et mot de passe haché avec scrypt (sel aléatoire), dans `data/compte.json` (0600).
+- Session : cookie signé HMAC-SHA256 (identifiant et expiration, 30 jours), HttpOnly et SameSite=Strict. Changer de
+  mot de passe renouvelle la clé de session et déconnecte les autres sessions.
+- Dès que le compte existe, toute route `/api` exige une session ; 5 échecs en 5 minutes suspendent les essais.
+- La mise à jour quotidienne (`cli refresh`) n'utilise pas l'API HTTP et n'est pas concernée.
+- Ce mot de passe protège l'accès à l'interface ; le chiffrement des données repose sur le coffre (clé de
+  récupération), indépendant du mot de passe.
+
 ## Classification des données
 
 - **Chiffrées** : profil (`data/profil/`, versions, sessions, documents de base), archives `candidatures/` (PDF,
