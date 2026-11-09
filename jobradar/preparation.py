@@ -173,7 +173,8 @@ def _safe_offer(offer: dict) -> bool:
             and workflow.nationality_requirement(
                 f"{offer.get('title') or ''} {offer.get('description') or ''}"
             ) is None
-            and (offer.get("deadline") or {}).get("state") != workflow.DeadlineState.EXPIREE.value)
+            and (offer.get("deadline") or {}).get("state") != workflow.DeadlineState.EXPIREE.value
+            and offer.get("online") != 0)  # annonce constatée retirée
 
 
 def _recent_first(offers: list[dict]) -> list[dict]:

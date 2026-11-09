@@ -35,6 +35,7 @@ def summary() -> dict:
         offers = [dict(row) for row in conn.execute(
             """SELECT o.id, o.search_id, o.title, o.company, o.score FROM offers o
                WHERE o.score >= 85 AND o.status NOT IN ('ignored') AND o.first_seen >= ?
+                 AND (o.online IS NULL OR o.online <> 0)
                  AND NOT EXISTS (SELECT 1 FROM applications p WHERE p.offer_id = o.id)
                ORDER BY o.score DESC LIMIT 10""", (since,))]
         reminders = [dict(row) for row in conn.execute(

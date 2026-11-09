@@ -188,6 +188,25 @@ def merge_duplicate_applications() -> list[tuple[int, int]]:
     return merged
 
 
+def backfill_removed_offers() -> int:
+    """Retraits d'annonce constatés par le robot avant que l'état soit enregistré : candidature et offre marquées
+    « annonce retirée » (masquée des résultats), tentative restée bloquée close (plus rien à faire)."""
+    count = 0
+    for application in db.list_applications():
+        for attempt in db.list_application_attempts(application["id"]):
+            if (attempt.get("intervention") or {}).get("kind") != "offer_removed":
+                continue
+            if application.get("offer_online") is not False and application.get("offer_online") != 0:
+                db.set_archive_fields(application["id"], {
+                    "offer_online": 0, "offer_checked_at_utc": attempt.get("updated_at_utc") or db.now()})
+                count += 1
+            if attempt["status"] in {"needs_user", "queued"} and not attempt.get("submit_clicked_at_utc"):
+                db.transition_application_attempt(attempt["id"], expected={"needs_user", "queued"}, status="cancelled",
+                                                  intervention=attempt["intervention"] | {"action": "skip"})
+            break
+    return count
+
+
 def same_target_sent(application_id: int, url: str | None) -> dict | None:
     """Autre candidature déjà envoyée vers la même page (annonces republiées sous un autre titre)."""
     key = matching.target_key(url)

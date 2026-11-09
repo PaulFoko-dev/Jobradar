@@ -43,6 +43,44 @@ def _enrich_linkedin(o: dict):
     polite_pause(1)
 
 
+ONLINE_CHECK_MIN_SCORE = 50
+ONLINE_CHECK_PER_RUN = 25
+# Agrégateurs qui gardent longtemps les annonces ou bloquent les vérifications : jamais seuls juges d'un retrait.
+AGGREGATOR_HOSTS = ("indeed.", "linkedin.com", "hellowork.com", "welcometothejungle.com", "jobteaser.com")
+
+
+def check_offers_online(search_id: int) -> dict:
+    """Annonces retirées parmi les offres pertinentes (au plus une vérification par jour et par offre).
+
+    Une offre est retirée si au moins une de ses pages répond « retirée » (404, page « offre expirée ») et
+    qu'aucune ne répond « en ligne ». Un agrégateur seul ne suffit pas à conclure : il garde souvent les annonces.
+    """
+    from . import capture  # import local : module lourd, utile seulement pendant un scan
+
+    removed = checked = 0
+    for offer in db.offers_to_check_online(search_id, ONLINE_CHECK_MIN_SCORE, ONLINE_CHECK_PER_RUN):
+        urls = list(dict.fromkeys([offer["url"], *(link.get("url") for link in offer["links"] if link.get("url"))]))
+        verdicts = {}
+        for url in urls:
+            try:
+                verdicts[url] = capture.is_offer_online(url, timeout_s=10)
+            except Exception:  # noqa: BLE001 - une vérification impossible reste « indéterminée »
+                verdicts[url] = None
+        offline = [url for url, verdict in verdicts.items() if verdict is False]
+        decisive = [url for url in offline if not any(host in url for host in AGGREGATOR_HOSTS)]
+        if any(verdict is True for verdict in verdicts.values()):
+            db.set_offer_online(offer["id"], True)
+        elif decisive or (offline and len(offline) == len(urls)):
+            db.set_offer_online(offer["id"], False)
+            removed += 1
+        else:
+            db.set_offer_online(offer["id"], None)
+        checked += 1
+    if removed:
+        _log(f"Annonces retirées : {removed} offre(s) masquée(s) des résultats ({checked} vérifiée(s))")
+    return {"checked": checked, "removed": removed}
+
+
 def _merge_duplicate_applications() -> None:
     """Candidatures en double (même offre, autre annonce) fusionnées avant le nettoyage des offres."""
     from . import application_flow  # import local : évite une dépendance circulaire au chargement
@@ -243,6 +281,11 @@ def run_search(search_id: int, score_only: bool = False, *, send_email: bool = T
         if not score_only:
             _collect(search_id, crit, cfg, index, stats)
         analyzed = _score(search_id, crit, cfg, stats)
+        if not score_only:
+            try:
+                check_offers_online(search_id)
+            except Exception as exc:  # réseau indisponible : les offres restent affichées, rien n'est perdu
+                _log(f"Vérification des annonces reportée : {exc}")
 
         db.mark_search_run(search_id)
         _notify(analyzed, send_email)

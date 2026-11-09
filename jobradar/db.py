@@ -763,6 +763,31 @@ def set_archive_fields(app_id: int, fields: dict) -> None:
         with connect() as c:
             c.execute(f"UPDATE applications SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?",
                       (*fields.values(), app_id))
+            if fields.get("offer_online") in (0, 1):
+                # L'offre de la recherche suit l'état constaté de son annonce (retirée : masquée des résultats).
+                c.execute("""UPDATE offers SET online=?, online_checked_at_utc=?
+                             WHERE id=(SELECT offer_id FROM applications WHERE id=?)""",
+                          (fields["offer_online"], fields.get("offer_checked_at_utc") or now(), app_id))
+
+
+def set_offer_online(offer_id: int, online: bool | None) -> None:
+    """Résultat d'une vérification d'annonce ; « indéterminé » (None) ne change que la date de vérification."""
+    with connect() as c:
+        if online is None:
+            c.execute("UPDATE offers SET online_checked_at_utc=? WHERE id=?", (now(), offer_id))
+        else:
+            c.execute("UPDATE offers SET online=?, online_checked_at_utc=? WHERE id=?", (int(online), now(), offer_id))
+
+
+def offers_to_check_online(search_id: int, min_score: int, limit: int) -> list[dict]:
+    """Offres pertinentes encore réputées en ligne, non vérifiées depuis 24 h, les mieux notées d'abord."""
+    since = (utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+    with connect() as c:
+        rows = c.execute("""SELECT id, url, links_json FROM offers
+                            WHERE search_id=? AND status <> 'ignored' AND (online IS NULL OR online = 1)
+                              AND score >= ? AND (online_checked_at_utc IS NULL OR online_checked_at_utc < ?)
+                            ORDER BY score DESC LIMIT ?""", (search_id, min_score, since, limit)).fetchall()
+    return [{"id": row["id"], "url": row["url"], "links": json.loads(row["links_json"] or "[]")} for row in rows]
 
 
 def archive_row(app_id: int) -> dict:

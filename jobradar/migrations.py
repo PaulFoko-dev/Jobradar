@@ -437,6 +437,15 @@ def _preparation_jobs(conn: sqlite3.Connection) -> None:
     _add_column(conn, "offers", "auto_apply_at_utc", "TEXT")
 
 
+def _offer_online(conn: sqlite3.Connection) -> None:
+    """Annonce retirée connue au niveau de l'offre (et plus seulement de la candidature) : masquée des résultats."""
+    _add_column(conn, "offers", "online", "INTEGER CHECK (online IS NULL OR online IN (0, 1))")
+    _add_column(conn, "offers", "online_checked_at_utc", "TEXT")
+    conn.execute("""UPDATE offers SET online = 0, online_checked_at_utc = (
+                        SELECT a.offer_checked_at_utc FROM applications a WHERE a.offer_id = offers.id)
+                    WHERE id IN (SELECT offer_id FROM applications WHERE offer_online = 0 AND offer_id IS NOT NULL)""")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     (1, _create_initial_schema),
     (2, _add_logo_columns),
@@ -454,6 +463,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     (14, _interview_progression),
     (15, _application_submit_guard),
     (16, _preparation_jobs),
+    (17, _offer_online),
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]
 

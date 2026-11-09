@@ -771,6 +771,9 @@ function filteredOffers() {
     const excluded = o.company_rule === "excluded";
     if (excluded !== (p.status === "excluded")) return false;
     if (excluded) return matchesText(o, q) && (!p.source || o.links.some(l => l.source === p.source));
+    // Annonce constatée retirée : masquée partout, sauf dans « Annonces retirées » et « Toutes ».
+    if (o.online === 0 && !["removed", "all"].includes(p.status)) return false;
+    if (p.status === "removed" && o.online !== 0) return false;
     if (p.status === "active" && (!["new", "fav"].includes(o.status) || (o.app_status && o.app_status !== "consultee"))) return false;
     if (["fav", "ignored"].includes(p.status) && o.status !== p.status) return false;
     if (p.status === "applied" && !o.app_id) return false;
@@ -850,13 +853,14 @@ function contractLabel(raw) {
 
 function contractBadge(o) {
   const c = contractLabel(o.analysis?.contract || o.contract);
-  return c ? `<span class="badge contract">${esc(c)}</span>` : "";
+  const removed = o.online === 0 ? `<span class="badge removed" title="L'annonce n'est plus en ligne">Annonce retirée</span>` : "";
+  return (c ? `<span class="badge contract">${esc(c)}</span>` : "") + removed;
 }
 
 function autoQueueButton(o) {
   if (o.auto_apply_at_utc) return `<button class="icon-btn on" type="button" disabled title="Déjà dans la file automatique" aria-label="Dans la file automatique">🤖</button>`;
   if (o.app_id) return "";
-  const blocked = o.status === "ignored" || o.deadline?.state === "expiree" || o.in_zone === false
+  const blocked = o.status === "ignored" || o.deadline?.state === "expiree" || o.in_zone === false || o.online === 0
     || o.company_rule === "excluded" || o.already_applied || o.nationality_required;
   return `<button class="icon-btn" type="button" data-auto-queue="${o.id}" ${blocked ? "disabled" : ""}
     title="${blocked ? "Cette offre n’est pas éligible à l’auto-candidature" : "Ajouter à la file de candidature automatique"}"
@@ -903,7 +907,7 @@ function renderOffers() {
     const city = a.city && a.city !== "Non précisé" ? a.city : o.location;
     const sources = [...new Set(o.links.map(l => l.source))];
     return `
-    <article class="card ${o.status === "ignored" || o.deadline?.state === "expiree" || isAlreadyApplied(o) ? "dim" : ""}" data-id="${o.id}" tabindex="0">
+    <article class="card ${o.status === "ignored" || o.deadline?.state === "expiree" || o.online === 0 || isAlreadyApplied(o) ? "dim" : ""}" data-id="${o.id}" tabindex="0">
       <div class="card-top">
         ${logoAv(o.company, o.logo)}
         <div class="card-title">
