@@ -383,3 +383,21 @@ def test_preparation_auto_echouee_peut_etre_relancee(client, make_offer, monkeyp
     assert response.status_code == 200
     assert response.json()["status"] == "queued"
     assert db.latest_preparation_job(application["id"])["params"] == {"offer_id": 42}
+
+
+def test_offre_retiree_ignoree_avant_toute_redaction(monkeypatch) -> None:
+    from jobradar import capture, preparation
+
+    updates, archived = [], []
+    monkeypatch.setattr(preparation.db, "get_application",
+                        lambda _id: {"id": 7, "url": "https://ats.example.com/job/1", "offer_online": None})
+    monkeypatch.setattr(capture, "is_offer_online", lambda _url, **_kw: False)
+    monkeypatch.setattr(preparation.db, "set_archive_fields", lambda app_id, fields: archived.append(fields))
+    monkeypatch.setattr(preparation.db, "update_preparation_job", lambda job_id, **fields: updates.append(fields))
+    monkeypatch.setattr(preparation.tailoring, "prepare", lambda *a, **k: pytest.fail("rédaction inutile"))
+    monkeypatch.setattr(preparation, "_notify", lambda *a: pytest.fail("aucune notification attendue"))
+
+    preparation._run_auto({"id": 3, "application_id": 7, "params": {}})
+
+    assert updates == [{"status": "done", "step": "offer_removed"}]
+    assert archived[0]["offer_online"] == 0

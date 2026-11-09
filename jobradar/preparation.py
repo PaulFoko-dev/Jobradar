@@ -92,9 +92,26 @@ def _ready_documents(job: dict, result: dict) -> dict[str, int]:
     return ids
 
 
+def _offer_removed_before_preparation(application_id: int) -> bool:
+    """Vérification légère de l'annonce avant de rédiger CV et lettre ; un doute laisse la préparation se faire."""
+    from . import capture  # import local : module lourd (navigateur), inutile aux préparations manuelles
+
+    application = db.get_application(application_id)
+    url = application.get("url") or ""
+    if application.get("offer_online") is False or (url and capture.is_offer_online(url) is False):
+        db.set_archive_fields(application_id, {
+            "offer_online": 0, "offer_checked_at_utc": db.utc_iso(db.utcnow(), "offer_checked_at")})
+        return True
+    return False
+
+
 def _run_auto(job: dict) -> None:
     application_id = job["application_id"]
     params = job["params"]
+    if _offer_removed_before_preparation(application_id):
+        # Offre retirée : aucune génération inutile et rien à faire pour l'utilisateur, donc aucune notification.
+        db.update_preparation_job(job["id"], status="done", step="offer_removed")
+        return
     db.update_preparation_job(job["id"], step="prepare")
     result = tailoring.prepare(application_id, kinds=params.get("kinds") or ["cv", "lettre"])
     db.update_preparation_job(job["id"], session_id=result["session"], result=result)

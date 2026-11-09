@@ -453,6 +453,7 @@ async function openResults(id) {
 const AA_STEPS = {
   queued: "en attente", prepare: "rédaction des documents", render: "création des fichiers", apply: "mise en file de l'envoi",
   queued_for_submission: "envoi assisté lancé", manual: "documents prêts, envoi manuel requis",
+  offer_removed: "offre retirée, ignorée sans rédaction",
 };
 
 function autoApplyStepLabel(job) {
@@ -470,6 +471,7 @@ function autoApplyResult(job) {
     if (job.status === "queued") return "En attente de démarrage…";
     if (job.status === "running") return `Préparation en cours · ${autoApplyStepLabel(job)}…`;
     if (job.step === "manual") return "Documents prêts · envoi manuel requis";
+    if (job.step === "offer_removed") return "Offre retirée : ignorée, aucun document rédigé";
     if (job.status === "done") return "Préparation terminée sans envoi assisté";
     return autoApplyStepLabel(job);
   }
