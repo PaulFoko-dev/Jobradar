@@ -127,6 +127,8 @@ def assistant(saved_profile, monkeypatch):
 
     def fake_ask(prompt, schema, task):
         calls.append({"prompt": prompt, "schema": schema, "task": task})
+        if set(schema.get("properties", {})) == {"bullets"}:
+            return {"bullets": []}  # second essai des puces refusées : aucune nouvelle proposition par défaut
         return deepcopy(replies.pop(0))
 
     monkeypatch.setattr(ai, "ask_ai", fake_ask)

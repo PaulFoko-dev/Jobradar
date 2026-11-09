@@ -173,6 +173,17 @@
       <tbody>${items}</tbody></table></details>`;
   }
 
+  // Reformulations : chaque puce du CV face au texte du profil qui la prouve.
+  function evidenceHtml(rows) {
+    const changed = (rows || []).filter(row => row.reformulated);
+    if (!changed.length) return "";
+    const items = changed.map(row => `<tr><td>${esc(row.source_text)}</td><td>${esc(row.text)}</td>
+      <td>${esc((row.highlighted_terms || []).join(", ") || "—")}${row.why ? `<br><small>${esc(row.why)}</small>` : ""}</td></tr>`).join("");
+    return `<details class="doc-why"><summary>Reformulations (${changed.length}) : texte de ton profil → puce du CV</summary>
+      <table><thead><tr><th>Texte du profil (preuve)</th><th>Puce du CV</th><th>Mis en avant pour l'offre</th></tr></thead>
+      <tbody>${items}</tbody></table></details>`;
+  }
+
   function reviewHtml(result) {
     const hasQuestions = Object.values(result.questions || {}).some(value => value?.length);
     return `<section class="doc-workflow" aria-labelledby="doc-review-title"><div data-doc-error aria-live="assertive"></div>
@@ -180,6 +191,7 @@
         <button class="btn ghost sm" type="button" data-review-close title="La proposition ne sera plus proposée à la réouverture">Abandonner la proposition</button></div>
       ${(result.notes || []).length ? `<div class="doc-notes"><b>Contrôles appliqués</b><ul>${result.notes.map(note => `<li>${esc(note)}</li>`).join("")}</ul></div>` : ""}
       ${explanationHtml(result.explanation)}
+      ${evidenceHtml(result.evidence)}
       ${questionsHtml(result.questions)}
       <div class="doc-review-grid">${compositionHtml(result.composition)}${letterHtml(result.letter)}</div>
       <details><summary>Différences et données structurées</summary><pre>${esc(JSON.stringify({ composition: result.composition, letter: result.letter }, null, 2))}</pre></details>

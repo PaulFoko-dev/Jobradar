@@ -19,7 +19,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from datetime import time as day_time
 
-from . import application_flow, archive, db, tailoring, workflow
+from . import application_flow, archive, db, private_io, tailoring, workflow
 from .config import settings
 
 LOGGER = logging.getLogger(__name__)
@@ -59,6 +59,7 @@ def view(job: dict | None) -> dict | None:
         try:
             session = tailoring.load_session(job["session_id"], job["application_id"])
             out["result"].update({key: session.get(key) for key in ("composition", "letter", "questions")})
+            out["result"].update({key: session[key] for key in ("evidence", "explanation") if key in session})
         except (FileNotFoundError, tailoring.CompositionError):
             pass  # session effacée : le résultat d'origine reste affichable
     return out
@@ -205,7 +206,7 @@ def _recent_item(raw: dict) -> dict:
         for name in ("avant-envoi.png", "confirmation.png", "journal.md") if (proof / name).is_file()
     }
     try:
-        supervision = json.loads((proof / "supervision.json").read_text(encoding="utf-8"))
+        supervision = json.loads(private_io.read_text(proof / "supervision.json"))
         if attempt and supervision.get("attempt_id") == attempt["id"]:
             item["supervision"] = {key: supervision.get(key) for key in ("page_kind", "understanding", "at", "waiting")}
     except (OSError, ValueError):
@@ -247,7 +248,7 @@ def activity(job_id: int) -> dict:
     journal = ""
     try:
         path = archive.directory_of(raw["application_id"]) / "envoi" / "journal.md"
-        journal = path.read_text(encoding="utf-8")[-100_000:] if path.is_file() else ""
+        journal = private_io.read_text(path)[-100_000:] if path.is_file() else ""
     except (OSError, db.NotFound):
         pass
     return {"job_id": job_id, "application_id": raw["application_id"], "events": events, "journal": journal}

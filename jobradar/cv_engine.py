@@ -192,3 +192,42 @@ def explanation(composition: dict | None, ranking: dict[str, list[Ranked]]) -> l
             rows.append({"id": item.id, "kind": kind, "label": item.label, "rank": position, "score": item.score,
                          "terms": item.matched[:8], "kept": item.id in used})
     return rows
+
+
+def _source_bullets(profile_data: dict) -> dict[str, tuple[str, dict]]:
+    found = {}
+    for kind in ("experiences", "projects", "certifications"):
+        for item in profile_data.get(kind) or []:
+            for bullet in (item.get("bullets") or []) if isinstance(item, dict) else []:
+                if isinstance(bullet, dict) and bullet.get("id"):
+                    found[str(bullet["id"])] = (str(item.get("id") or ""), bullet)
+    return found
+
+
+def annotate_bullets(composition: dict | None, profile_data: dict, offer: dict) -> list[dict]:
+    """Rattache chaque puce du CV à sa preuve : texte source, termes de l'offre mis en avant, nombres repris.
+
+    Appelé après les contrôles anti-invention (``tailoring.validate_composition``) : une puce qui arrive ici est déjà
+    rattachée à un élément du profil ; l'annotation sert l'interface (« source → reformulation ») et les tests.
+    """
+    terms, sources, evidence = offer_terms(offer), _source_bullets(profile_data), []
+    for section in (composition or {}).get("sections") or []:
+        for item in section.get("items") or []:
+            for bullet in (item.get("bullets") or []) if isinstance(item, dict) else []:
+                why = str(bullet.pop("why", "") or "")  # la composition reste celle du CV, sans métadonnées
+                origin = sources.get(str(bullet.get("ref") or ""))
+                if origin is None:
+                    continue
+                item_id, source = origin
+                text, original = str(bullet.get("text") or ""), str(source.get("text") or "")
+                variants = {str(variant.get("text") or "").strip() for variant in source.get("variants") or []}
+                reformulated = text.strip() != original.strip() and text.strip() not in variants
+                highlighted = [term for term in _matches(text, terms) if term not in _matches(original, terms)]
+                evidence.append({
+                    "ref": bullet.get("ref"), "text": text,
+                    "item": item_id, "source_text": original, "reformulated": reformulated,
+                    "offer_terms": _matches(text, terms)[:8], "highlighted_terms": highlighted[:8],
+                    "numbers": sorted(set(re.findall(r"\d+(?:[.,]\d+)?", text))),
+                    "why": why if reformulated else "",
+                })
+    return evidence

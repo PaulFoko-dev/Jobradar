@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import ai, archive, cv_engine, db, profile
+from . import ai, archive, cv_engine, db, private_io, profile
 
 
 class CompositionError(ValueError):
@@ -393,12 +393,50 @@ def _assemble_cv(raw: dict, ctx: _Context, *, language: str, base_id: str | None
                 fields = ({name: known[1].get(name) for name in ITEM_FIELDS[kind]}
                           if known and known[0] == kind else {})
                 items.append({"ref": shown.get("ref"), "fields": fields, "bullets": [
-                    {"ref": bullet.get("ref"), "text": str(bullet.get("text") or "")}
+                    {"ref": bullet.get("ref"), "text": str(bullet.get("text") or ""),
+                     "why": str(bullet.get("why") or "")[:300]}
                     for bullet in shown.get("bullets") or [] if isinstance(bullet, dict)]})
             sections.append({"type": kind, "title": title, "items": items, "groups": []})
     return {"kind": "cv", "language": language, "base_source_id": base_id, "template": template,
             "headline": str(raw.get("headline") or ""), "summary": str(raw.get("summary") or ""),
             "sections": sections}
+
+
+def _retry_rejected(composition: dict, ctx: _Context, offer: dict) -> list[str]:
+    """Reformulations refusées par le contrôle anti-invention : un seul nouvel essai groupé, motivé par la raison
+    du refus ; une proposition encore invalide laisse le texte du profil déjà en place."""
+    rejected = ctx.__dict__.pop("rejected", [])
+    if not rejected:
+        return []
+    payload = [{"ref": item["ref"], "texte_du_profil": next(
+                    (b.get("text") for b in item["source"].get("bullets") or [] if b.get("id") == item["ref"]), ""),
+                "proposition_refusee": item["proposed"], "raison": item["reason"]} for item in rejected]
+    prompt = ("Ces reformulations de puces de CV ont été refusées par le contrôle anti-invention. Propose pour chacune "
+              "une nouvelle reformulation qui met en avant les exigences de l'offre SANS ajouter de nombre, d'outil, de "
+              "compétence, de rôle ni de résultat absents du texte du profil. Indique `why`.\n"
+              f"MOTS-CLÉS DE L'OFFRE : {', '.join(offer_keywords(offer)) or 'aucun'}\n"
+              "PUCES (JSON) :\n" + json.dumps(payload, ensure_ascii=False))
+    try:
+        schema = {"type": "object", "properties": {"bullets": {"type": "array", "items": _BULLET_OUT}},
+                  "required": ["bullets"]}
+        answer = ai.ask_ai(prompt, schema, "tailoring") or {}
+    except ai.AIError:
+        return []
+    proposals = {str(b.get("ref")): b for b in answer.get("bullets") or [] if isinstance(b, dict)}
+    sources = {item["ref"]: item["source"] for item in rejected}
+    notes = []
+    for section in composition.get("sections") or []:
+        for shown in section.get("items") or []:
+            for index, bullet in enumerate(shown.get("bullets") or []):
+                proposal = proposals.get(str(bullet.get("ref")))
+                if proposal is None or bullet.get("ref") not in sources:
+                    continue
+                candidate = {"ref": bullet["ref"], "text": str(proposal.get("text") or ""),
+                             "why": str(proposal.get("why") or "")[:300]}
+                if _attempt(_check_bullet, sources[bullet["ref"]], candidate, ctx) is None:
+                    shown["bullets"][index] = candidate
+                    notes.append(f"Puce {bullet['ref']} : seconde reformulation acceptée après correction.")
+    return notes
 
 
 def _repair_bullets(shown: dict, source: dict, ctx: _Context, notes: list[str]) -> None:
@@ -413,6 +451,9 @@ def _repair_bullets(shown: dict, source: dict, ctx: _Context, notes: list[str]) 
         if original and _attempt(_check_bullet, source, fallback, ctx) is None:
             kept.append(fallback)
             notes.append(f"{problem} Texte du profil conservé.")
+            # Seconde chance motivée (``_retry_rejected``) : la raison du refus est rendue à l'IA.
+            ctx.__dict__.setdefault("rejected", []).append(
+                {"ref": bullet.get("ref"), "source": source, "proposed": bullet.get("text"), "reason": problem})
         else:
             notes.append(f"{problem} Puce écartée.")
     refs = [bullet["ref"] for bullet in kept]
@@ -684,6 +725,11 @@ def _important_missing_skills(candidates: list[str], ctx: _Context, offer: dict,
 
 _REF_TEXT = {"type": "object", "properties": {"ref": {"type": "string"}, "text": {"type": "string"}},
              "required": ["ref", "text"]}
+# Puce proposée : sa référence dans le profil, son texte, et la justification d'une éventuelle reformulation.
+_BULLET_OUT = {"type": "object", "properties": {
+    "ref": {"type": "string"}, "text": {"type": "string"},
+    "why": {"type": "string", "description": "Exigence de l'offre que la reformulation met en avant ; vide si inchangée"}},
+    "required": ["ref", "text", "why"]}
 _AI_SECTION = {
     "type": "object",
     "properties": {
@@ -691,7 +737,7 @@ _AI_SECTION = {
         "title": {"type": "string"},
         "items": {"type": "array", "items": {
             "type": "object",
-            "properties": {"ref": {"type": "string"}, "bullets": {"type": "array", "items": _REF_TEXT}},
+            "properties": {"ref": {"type": "string"}, "bullets": {"type": "array", "items": _BULLET_OUT}},
             "required": ["ref", "bullets"],
         }},
         "groups": {"type": "array", "items": {
@@ -745,8 +791,10 @@ TAILORING_RULES = """Tu adaptes des documents de candidature à une offre, SANS 
   Sélectionne et ordonne les éléments par pertinence pour l'offre (une page pour un stage ou une alternance), en
   partant du CV DE BASE (sélection, ordre, ton) et en puisant dans le profil complet. Ne fournis ni dates, ni
   organisations, ni intitulés : ils sont recopiés du profil.
-- Puces : texte du profil, variante (priorité à celles qui ont `validated_at`), ou reformulation avec le vocabulaire
-  de l'offre, sans ajouter de nombre, d'outil ni de compétence absents de l'élément.
+- Puces : texte du profil, variante (priorité à celles qui ont `validated_at`), ou reformulation qui met en avant ce
+  que l'offre demande (vocabulaire exact de l'offre, verbe d'action, résultat en tête), sans ajouter de nombre,
+  d'outil, de compétence, de rôle ni de résultat absents de l'élément. Pour chaque puce reformulée, `why` dit en une
+  phrase quelle exigence de l'offre elle met en avant ; `why` vide si le texte est repris tel quel.
 - Sections : `experience`, `project`, `education`, `certification`, `language` avec `items` et `groups: []` ;
   `skills` avec `groups` et `items: []`. Titres standards ATS dans la langue du CV.
 - Compétences : uniquement celles du profil, niveau écrit en toutes lettres (« Python (avancé) ») ; le niveau
@@ -793,8 +841,18 @@ def _base_text(source: dict | None) -> str:
         return "(contenu indisponible)"
 
 
+def require_cv_consent() -> None:
+    """Coffre activé : le contenu professionnel du CV ne part vers l'IA qu'avec le consentement global."""
+    from . import private_io, vault
+
+    if private_io._vault_active() and not vault.cv_consent():
+        raise CompositionError("Envoi du contenu de ton CV à l'IA non autorisé : active le consentement dans "
+                               "Réglages → Coffre chiffré.")
+
+
 def build_prompt(data: dict, offer: dict, *, kinds: list[str], cv_base: dict | None, letter_base: dict | None,
                  cv_language: str, letter_language: str, family: str) -> str:
+    require_cv_consent()
     decided = sorted(_decisions(data, family))
     forbidden = _forbidden_terms(_context(data, offer_keywords(offer)))
     sections = [
@@ -871,7 +929,7 @@ def _save_session(data: dict) -> None:
 def _load_session(session_id: str, application_id: int) -> dict:
     path = _session_path(session_id)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(private_io.read_text(path))
     except (OSError, ValueError) as exc:
         raise FileNotFoundError("Session d'adaptation introuvable.") from exc
     if data.get("application_id") != application_id:
@@ -947,9 +1005,11 @@ def prepare(application_id: int, *, kinds: list[str], base_cv: str | None = None
         for decision in _decisions(data, family).values():
             _apply_decision(composition, ctx, decision)
         notes += _repair_cv(composition, ctx)
+        notes += _retry_rejected(composition, ctx, offer)
         notes += _align_headline(composition, offer, ctx)
         composition = validate_composition(composition, data, keywords)
         ranking = cv_engine.rank(data, offer)
+        evidence = cv_engine.annotate_bullets(composition, data, offer)
         explanation = cv_engine.explanation(composition, ranking)
         missed = cv_engine.missed_top_items(composition, ranking)
         if missed:
@@ -957,7 +1017,7 @@ def prepare(application_id: int, *, kinds: list[str], base_cv: str | None = None
                          + " ; ".join(f"{item.label} ({item.reason()})" for item in missed)
                          + ". Tu peux les ajouter depuis l'onglet Documents.")
     else:
-        explanation = []
+        explanation, evidence = [], []
     letter = None
     if "lettre" in kinds:
         raw_letter = result.get("letter")
@@ -1001,11 +1061,12 @@ def prepare(application_id: int, *, kinds: list[str], base_cv: str | None = None
     questions = _questions(result.get("questions"), ctx, offer, family)
     session = {"id": str(uuid.uuid4()), "application_id": application_id, "kinds": kinds,
                "composition": composition, "letter": letter, "questions": questions, "offer": offer,
-               "offer_keywords": keywords, "job_family": family, "notes": notes, "explanation": explanation}
+               "offer_keywords": keywords, "job_family": family, "notes": notes, "explanation": explanation,
+               "evidence": evidence}
     _save_session(session)
     return {"session": session["id"], "composition": composition, "letter": letter, "questions": questions,
             "suggested_bases": profile.suggest_bases(offer, language=language), "notes": notes,
-            "explanation": explanation}
+            "explanation": explanation, "evidence": evidence}
 
 
 def suggest_bases(application_id: int, *, kind: str | None = None, language: str | None = None) -> list[dict]:
@@ -1218,6 +1279,7 @@ def refine(application_id: int, body: dict) -> dict:
     if current_letter is not None:
         current_letter = validate_letter(current_letter, data, session["offer_keywords"], session["offer"])
     masked_instruction = profile.mask_data(instruction, data["identity"])
+    require_cv_consent()
     prompt = "\n\n".join([
         TAILORING_RULES,
         "RÉVISION DEMANDÉE PAR L'UTILISATEUR : applique la consigne si et seulement si elle respecte les règles "
@@ -1251,6 +1313,7 @@ def refine(application_id: int, body: dict) -> dict:
         notes += _repair_cv(composition, ctx)
         notes += _align_headline(composition, session["offer"], ctx)
         composition = validate_composition(composition, data, session["offer_keywords"])
+        session["evidence"] = cv_engine.annotate_bullets(composition, data, session["offer"])
     letter = current_letter
     if current_letter is not None:
         raw = result.get("letter")
@@ -1307,7 +1370,8 @@ def refine(application_id: int, body: dict) -> dict:
     session.update({"composition": composition, "letter": letter, "notes": notes})
     _save_session(session)
     return {"session": session["id"], "composition": composition, "letter": letter,
-            "questions": session.get("questions") or {}, "notes": notes}
+            "questions": session.get("questions") or {}, "notes": notes,
+            "explanation": session.get("explanation") or [], "evidence": session.get("evidence") or []}
 
 
 def refine_document(document_id: int, instruction: str) -> dict:
@@ -1576,7 +1640,7 @@ def rerender_document(document_id: int, composition: dict, template: dict | None
                 old.unlink(missing_ok=True)
         summary_path = directory / "composition.json"
         try:
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary = json.loads(private_io.read_text(summary_path))
         except (OSError, ValueError):
             summary = {}
         summary["composition" if document["kind"] == "cv" else "letter"] = content
@@ -1661,7 +1725,7 @@ def mark_sent(document_id: int) -> dict:
     sent = directory / "documents" / "envoye"
     sources = [archive.resolve_file(directory, item["path"]) for item in document["files"]]
     for source in sources:
-        profile.atomic_write(sent / source.name, source.read_bytes())
+        profile.atomic_write(sent / source.name, private_io.read_bytes(source))
     result = db.set_document_status(document_id, "envoye")
     archive.refresh(document["application_id"])
     return result

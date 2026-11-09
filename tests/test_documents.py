@@ -399,7 +399,7 @@ def test_prepare_and_answers_routes(client, monkeypatch):
     assert job["status"] == "done", job
     body = job["result"]
     assert set(body) == {"session", "composition", "letter", "questions", "suggested_bases", "notes",
-                         "explanation"}
+                         "explanation", "evidence"}
 
     answered = client.post(f"/api/applications/{application['id']}/documents/answers",
                            json={"session": body["session"], "skills": [{"name": "Sentinel", "status": "inconnu"}]})
