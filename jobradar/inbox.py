@@ -150,3 +150,40 @@ def scan(messages: list[dict] | None = None) -> dict:
                                                       dedupe=f"reponse:{application['id']}:{message['id']}")
             proposals += int(bool(created))
     return {"enabled": True, "messages": len(messages), "proposals": proposals, "confirmed": confirmed}
+
+
+CODE = re.compile(r"(?<![\d-])(\d{6}|\d{4}|\d{8})(?![\d-])")
+LINK = re.compile(r"https?://[^\s\"'<>]+")
+VERIFY_WORDS = ("verif", "verify", "confirm", "activate", "activation", "valid", "token", "otp")
+
+
+def extract_verification(message: dict, domains: set[str]) -> dict | None:
+    """Code ou lien de vérification d'un message envoyé par le site de candidature (lecture locale)."""
+    sender = parseaddr(message["from"])[1].lower()
+    body = message["body"]
+    sender_ok = any(sender.endswith(domain) for domain in domains if domain)
+    links = [link.rstrip(".,);") for link in LINK.findall(body)
+             if any(word in link.lower() for word in VERIFY_WORDS)
+             and any(domain in link.lower() for domain in domains if domain)]
+    text = norm(f"{message['subject']} {body}")
+    code = None
+    if any(word in text for word in ("code", "verification", "otp", "one time")):
+        found = CODE.findall(re.sub(r"https?://\S+", " ", f"{message['subject']} {body}"))
+        code = found[0] if found else None
+    if not sender_ok and not links:
+        return None
+    return {"code": code, "link": links[0] if links else None} if (code or links) else None
+
+
+def find_verification(domains: set[str], since: datetime) -> dict | None:
+    """Dernier code ou lien de vérification reçu depuis ``since`` d'un des domaines du site ; None sinon."""
+    if not settings()["enabled"]:
+        return None
+    for message in reversed(fetch(1)):
+        received = message.get("received")
+        if received is not None and received.astimezone(timezone.utc) < since:
+            continue
+        found = extract_verification(message, domains)
+        if found:
+            return found
+    return None

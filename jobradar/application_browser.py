@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 from urllib.request import urlopen
@@ -844,6 +845,40 @@ def _base_domain(url: str) -> str:
     return ".".join(host.split(".")[-2:])
 
 
+CODE_FIELD = ('input[autocomplete="one-time-code"], input[name*="code" i], input[id*="code" i], '
+              'input[placeholder*="code" i], input[aria-label*="code" i]')
+
+
+def _apply_email_verification(page, domains: set[str], since, used: set, supervision) -> bool:
+    """Code ou lien de vérification reçu par e-mail (lecture locale de la boîte) : saisi ou ouvert par le robot."""
+    from . import inbox
+
+    try:
+        found = inbox.find_verification({domain for domain in domains if domain}, since)
+    except Exception:  # boîte injoignable : l'attente humaine continue normalement
+        return False
+    if not found:
+        return False
+    key = found.get("code") or found.get("link")
+    if key in used:
+        return False
+    used.add(key)
+    try:
+        field = page.locator(CODE_FIELD)
+        if found.get("code") and field.count() and field.first.is_visible():
+            field.first.fill(found["code"])
+            field.first.press("Enter")
+            supervision.journal.note("Code de vérification reçu par e-mail : saisi automatiquement.")
+            return True
+        if found.get("link"):
+            page.goto(found["link"], wait_until="domcontentloaded", timeout=45_000)
+            supervision.journal.note("Lien de vérification reçu par e-mail : ouvert automatiquement.")
+            return True
+    except PlaywrightError:
+        return False
+    return False
+
+
 def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
     """Étape humaine (connexion, compte, captcha, code e-mail) : JobRadar surveille et reprend seul.
 
@@ -866,8 +901,13 @@ def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
     domains = {_base_domain(page.url), _base_domain(attempt["target_url"])}
     known = {tab for tab in context.pages if tab is not page}  # onglets à toi (messagerie…) : ignorés
     seen: dict = {}  # onglet -> [empreinte de départ, dernière empreinte, relevés stables]
+    started, last_mail_check, used_verifications = datetime.now(timezone.utc) - timedelta(minutes=2), 0.0, set()
     try:
         while time.monotonic() < deadline:
+            if kind in {"login", "account_creation"} and time.monotonic() - last_mail_check > 20:
+                last_mail_check = time.monotonic()
+                if _apply_email_verification(page, domains, started, used_verifications, supervision):
+                    supervision.last_hash = None
             tabs = [tab for tab in context.pages if not tab.is_closed() and tab not in known]
             # Nouvel onglet du même site (lien de validation, connexion unique…) : suivi aussi.
             tabs = [tab for tab in tabs if tab is page or _base_domain(tab.url) in domains]

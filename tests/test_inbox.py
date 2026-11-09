@@ -45,3 +45,40 @@ def test_scan_proposes_statuses_and_confirms_unconfirmed_submissions(client, mon
         if hasattr(notifications, "list_notifications") else client.get("/api/notifications").json()
     assert any(n["kind"] == "response_detected" and n["payload"]["proposed_status"] == "refuse" for n in proposals)
     assert inbox.scan(messages)["proposals"] == 0  # une seule notification par message
+
+
+def test_verification_code_and_link_are_extracted_only_from_the_site() -> None:
+    domains = {"myworkdayjobs.com", "thalesgroup.com"}
+    code = {"from": "Workday <noreply@myworkdayjobs.com>", "subject": "Votre code de vérification",
+            "body": "Votre code de vérification est 482913. Il expire dans 10 minutes."}
+    link = {"from": "Thales <careers@thalesgroup.com>", "subject": "Activez votre compte",
+            "body": "Cliquez ici : https://thales.wd3.myworkdayjobs.com/activate?token=abc123 pour activer."}
+    other = {"from": "Banque <info@banque.fr>", "subject": "Votre code", "body": "Code 123456"}
+    assert inbox.extract_verification(code, domains) == {"code": "482913", "link": None}
+    assert inbox.extract_verification(link, domains)["link"] == "https://thales.wd3.myworkdayjobs.com/activate?token=abc123"
+    assert inbox.extract_verification(other, domains) is None
+
+
+def test_robot_types_the_verification_code_received_by_email(monkeypatch) -> None:
+    from playwright.sync_api import sync_playwright
+
+    from jobradar import application_browser
+
+    monkeypatch.setattr(inbox, "find_verification", lambda domains, since: {"code": "482913", "link": None})
+
+    class Journal:
+        notes = []
+
+        def note(self, text):
+            self.notes.append(text)
+
+    supervision = type("S", (), {"journal": Journal()})()
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.set_content('<form onsubmit="return false"><label for="c">Code de vérification</label><input id="c" name="verification_code"></form>')
+        used = set()
+        assert application_browser._apply_email_verification(page, {"example.com"}, None, used, supervision)
+        assert page.input_value("#c") == "482913"
+        assert not application_browser._apply_email_verification(page, {"example.com"}, None, used, supervision)
+        browser.close()
