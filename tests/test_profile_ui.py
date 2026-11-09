@@ -51,3 +51,15 @@ def test_interface_is_revalidated_after_an_update(client) -> None:
     assert page.headers["cache-control"] == script.headers["cache-control"] == "no-cache"
     assert "LINK_FIELDS" in script.text and 'name="link-${label}"' in script.text
     assert client.get("/static/profile-ui.js", headers={"if-none-match": script.headers["etag"]}).status_code == 304
+
+
+def test_profile_avatar_is_picked_from_the_gallery_and_shown_in_the_top_bar(client) -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    account = (ROOT / "jobradar/static/auth-ui.js").read_text(encoding="utf-8")
+    assert "catalogue.json" in source and "body: { avatar }" in source
+    assert "window.JobRadarAuth?.setAvatar?.(current.avatar)" in source
+    assert "setAvatar," in account and "/^[a-z0-9-]{1,40}$/" in account
+    assert client.get("/static/img/avatars/catalogue.json").status_code == 200
+    assert client.get("/static/img/avatars/cyber-pentest.webp").headers["content-type"] == "image/webp"
+    assert client.put("/api/profile", json={"avatar": "inconnu"}).status_code == 400
+    assert client.put("/api/profile", json={"avatar": "cyber-soc"}).json()["avatar"] == "cyber-soc"

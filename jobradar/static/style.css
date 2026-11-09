@@ -965,6 +965,8 @@ body.auth-locked .app { filter: blur(6px); pointer-events: none; user-select: no
 .avatar { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; font-weight: 700; font-size: .85em;
   color: #fff; background: linear-gradient(135deg, var(--accent), var(--mint)); }
 .avatar.lg { width: 44px; height: 44px; font-size: 1em; }
+.avatar.has-img { background: none; overflow: hidden; }
+.avatar img { width: 100%; height: 100%; display: block; border-radius: 50%; }
 .account-name { font-weight: 600; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chevron { width: 16px; height: 16px; }
 .account-dropdown { position: absolute; right: 0; top: calc(100% + 8px); z-index: 50; width: 280px; padding: 8px;

@@ -3,6 +3,7 @@
   let resolveReady;
   const readyPromise = new Promise(resolve => (resolveReady = resolve));
   let state = { account: false, authenticated: false, username: null };
+  let avatarId = "";  // avatar choisi dans « Mon profil » ; sinon les initiales
 
   async function call(path, body, method = "POST") {
     const response = await fetch(path, { method, headers: { "Content-Type": "application/json" },
@@ -42,6 +43,31 @@
   function initials(name) {
     const parts = String(name || "?").split(/[._@\s-]+/).filter(Boolean);
     return ((parts[0] || "?")[0] + (parts[1]?.[0] || "")).toUpperCase();
+  }
+
+  // Remplit les pastilles du compte : image de l'avatar, ou initiales si aucun avatar ou si l'image manque.
+  function paintAvatar() {
+    const name = state.username || "Invité";
+    document.querySelectorAll("#accountSlot .avatar").forEach(span => {
+      span.textContent = "";
+      span.classList.toggle("has-img", Boolean(avatarId));
+      if (!avatarId) { span.textContent = initials(name); return; }
+      const image = new Image();
+      image.alt = "";
+      image.src = `/static/img/avatars/${avatarId}.webp`;
+      image.onerror = () => { avatarId = ""; paintAvatar(); };
+      span.appendChild(image);
+    });
+  }
+
+  function setAvatar(id) {
+    avatarId = /^[a-z0-9-]{1,40}$/.test(String(id || "")) ? id : "";
+    paintAvatar();
+  }
+
+  // Profil illisible (coffre verrouillé, première ouverture) : les initiales restent affichées.
+  async function loadAvatar() {
+    try { setAvatar((await call("/api/profile", null, "GET")).avatar); } catch { /* initiales */ }
   }
 
   function screen(mode, message = "") {
@@ -90,6 +116,7 @@
     document.getElementById("authScreen")?.remove();
     document.body.classList.remove("auth-locked");
     renderTopbar();
+    loadAvatar();
     resolveReady(state);
   }
 
@@ -129,6 +156,7 @@
       if (event.key === "ArrowUp") { event.preventDefault(); items[(index - 1 + items.length) % items.length].focus(); }
     });
     menu.querySelectorAll("[data-menu]").forEach(item => (item.onclick = () => { toggle(false); action(item.dataset.menu); }));
+    paintAvatar();
   }
 
   async function action(name) {
@@ -183,6 +211,7 @@
   window.JobRadarAuth = Object.freeze({
     ready: () => readyPromise,
     require: message => screen("login", message || "Ta session a expiré : reconnecte-toi."),
+    setAvatar,
   });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();

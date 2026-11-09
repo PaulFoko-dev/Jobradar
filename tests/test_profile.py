@@ -323,3 +323,28 @@ def test_suggest_base_uses_tags_language_and_keywords(data_dir):
 
     assert [item["id"] for item in french] == ["src-1", "src-2"]
     assert english[0]["id"] == "src-2"
+
+
+def test_avatar_is_chosen_from_the_gallery_and_survives_its_removal(data_dir, monkeypatch):
+    assert profile.empty_profile()["avatar"] == ""
+    assert profile.update_profile({"avatar": "cyber-pentest"})["avatar"] == "cyber-pentest"
+    with pytest.raises(profile.ProfileError, match="Avatar inconnu"):
+        profile.update_profile({"avatar": "../../static/app"})
+    with pytest.raises(profile.ProfileError, match="Avatar inconnu"):
+        profile.update_profile({"avatar": ["cyber-soc"]})
+    assert profile.load_profile()["avatar"] == "cyber-pentest"
+    assert profile.update_profile({"avatar": ""})["avatar"] == ""
+    profile.update_profile({"avatar": "cyber-soc"})
+    monkeypatch.setattr(profile, "avatar_ids", lambda: frozenset())  # avatar retiré de la galerie
+    assert profile.load_profile()["avatar"] == "cyber-soc"
+
+
+def test_every_gallery_avatar_has_its_image():
+    entries = json.loads(profile.AVATAR_CATALOGUE.read_text(encoding="utf-8"))
+    ids = [entry["id"] for entry in entries]
+    assert ids and len(ids) == len(set(ids))
+    for entry in entries:
+        assert entry["id"].replace("-", "").isalnum() and entry["id"] == entry["id"].lower()
+        assert entry["group"] and entry["title"] and entry["job"]
+        assert (profile.AVATAR_CATALOGUE.parent / f"{entry['id']}.webp").is_file()
+    assert profile.avatar_ids() == frozenset(ids)

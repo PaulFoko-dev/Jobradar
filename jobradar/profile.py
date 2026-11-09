@@ -17,6 +17,7 @@ import threading
 import unicodedata
 import zipfile
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,8 @@ IDENTITY_MARKERS = {
 IDENTITY_TEXT_FIELDS = ("full_name", "email", "phone", "address_line1", "postal_code", "city", "region", "country")
 # Toute modification du profil (lecture, changement, écriture) se fait sous ce verrou.
 LOCK = threading.RLock()
+# Galerie des avatars proposés : une image <id>.webp par entrée, servie sous /static/img/avatars/.
+AVATAR_CATALOGUE = Path(__file__).parent / "static" / "img" / "avatars" / "catalogue.json"
 
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}(?![\w-])")
 _PHONE = re.compile(
@@ -102,6 +105,7 @@ def empty_profile() -> dict:
         "identity": {field: "" for field in IDENTITY_TEXT_FIELDS} | {"links": []},
         "headline": "",
         "summary": "",
+        "avatar": "",
         "experiences": [],
         "projects": [],
         "education": [],
@@ -159,6 +163,16 @@ def _slug(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "-", fold(value)).strip("-")
 
 
+@lru_cache(maxsize=1)
+def avatar_ids() -> frozenset[str]:
+    """Identifiants de la galerie d'avatars (vide si le catalogue manque)."""
+    try:
+        entries = json.loads(AVATAR_CATALOGUE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    return frozenset(entry["id"] for entry in entries if isinstance(entry, dict) and isinstance(entry.get("id"), str))
+
+
 def _normalise_profile(data: dict) -> dict:
     if not isinstance(data, dict):
         raise ProfileError("Le profil doit être un objet JSON.")
@@ -174,6 +188,9 @@ def _normalise_profile(data: dict) -> dict:
     links = result["identity"].get("links")
     if not isinstance(links, list) or any(not isinstance(link, dict) for link in links):
         raise ProfileError("Les liens d'identité doivent être une liste d'objets.")
+    # Un avatar retiré de la galerie reste lisible : l'interface revient alors aux initiales.
+    if not isinstance(result.get("avatar"), str):
+        raise ProfileError("L'avatar du profil doit être un identifiant texte.")
     for key in PROFILE_LISTS:
         if not isinstance(result.get(key), list):
             raise ProfileError(f"Le champ « {key} » doit être une liste.")
@@ -247,6 +264,8 @@ def update_profile(changes: dict) -> dict:
     unknown = set(changes) - set(empty_profile())
     if unknown:
         raise ProfileError(f"Champs de profil inconnus : {', '.join(sorted(unknown))}.")
+    if "avatar" in changes and (not isinstance(changes["avatar"], str) or changes["avatar"] not in {"", *avatar_ids()}):
+        raise ProfileError("Avatar inconnu : choisis-en un dans la galerie.")
     with LOCK:
         current = load_profile()
         changes = deepcopy(changes)

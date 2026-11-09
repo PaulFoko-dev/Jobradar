@@ -1,0 +1,23 @@
+[
+  {"id": "cyber-pentest", "group": "Cybersécurité", "title": "L’Ombre Écarlate", "job": "Pentest · Red Team"},
+  {"id": "cyber-soc", "group": "Cybersécurité", "title": "Le Veilleur du Rempart", "job": "SOC · Blue Team"},
+  {"id": "cyber-cti", "group": "Cybersécurité", "title": "Le Maître des Corbeaux", "job": "Threat Intelligence"},
+  {"id": "cyber-appsec", "group": "Cybersécurité", "title": "Le Forgeron-Runiste", "job": "AppSec · DevSecOps"},
+  {"id": "cyber-ot", "group": "Cybersécurité", "title": "La Gardienne des Forges-Mères", "job": "Sécurité OT · ICS"},
+  {"id": "cyber-crypto", "group": "Cybersécurité", "title": "Lae Tisseur·se de Chiffres", "job": "Cryptographie"},
+  {"id": "data-engineer", "group": "Data", "title": "La Bâtisseuse d’Aqueducs", "job": "Data Engineer"},
+  {"id": "data-analyst", "group": "Data", "title": "Le Cartographe des Courants", "job": "Data Analyst"},
+  {"id": "data-scientist", "group": "Data", "title": "L’Astromancienne", "job": "Data Scientist"},
+  {"id": "data-bi", "group": "Data", "title": "Le Héraut des Tapisseries", "job": "BI · Data Viz"},
+  {"id": "data-dba", "group": "Data", "title": "L’Archiviste du Grand Puits", "job": "DBA · Gouvernance des données"},
+  {"id": "dev-fullstack", "group": "Développement", "title": "La Compagnonne du Tour", "job": "Fullstack"},
+  {"id": "dev-mobile", "group": "Développement", "title": "L’Enchanteur des Miroirs de Poche", "job": "Mobile"},
+  {"id": "infra-cloud", "group": "Infrastructure", "title": "L’Architecte des Îles Flottantes", "job": "Cloud"},
+  {"id": "infra-devops", "group": "Infrastructure", "title": "Le Capitaine de Port", "job": "DevOps"},
+  {"id": "infra-sre", "group": "Infrastructure", "title": "La Gardienne du Phare", "job": "SRE"},
+  {"id": "infra-reseau", "group": "Infrastructure", "title": "Le Colombophile des Vents", "job": "Réseau"},
+  {"id": "infra-sysadmin", "group": "Infrastructure", "title": "L’Intendant de l’Île-Mère", "job": "Administration systèmes"},
+  {"id": "produit-ux", "group": "Produit", "title": "Le Jardinier des Sentiers", "job": "Design UX/UI"},
+  {"id": "produit-po", "group": "Produit", "title": "Le Capitaine d’Expédition", "job": "Product Owner · Product Manager"},
+  {"id": "produit-scrum", "group": "Produit", "title": "La Maîtresse de Cadence", "job": "Scrum Master · Coach agile"}
+]

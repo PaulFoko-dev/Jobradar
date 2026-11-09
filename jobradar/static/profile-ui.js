@@ -29,6 +29,61 @@
   let current = null;
   let versions = [];
   let busy = false;
+  const AVATAR_BASE = "/static/img/avatars/";
+  let avatars = [];  // galerie : [{ id, group, title, job }] lue dans catalogue.json
+
+  async function loadAvatars() {
+    if (avatars.length) return;
+    try {
+      const response = await fetch(`${AVATAR_BASE}catalogue.json`);
+      if (response.ok) avatars = await response.json();
+    } catch { avatars = []; }
+  }
+
+  function avatarOf(id) {
+    return avatars.find(item => item.id === id) || null;
+  }
+
+  // Avatar choisi, ou initiales du nom si aucun avatar (ou un avatar retiré de la galerie).
+  function avatarBlock() {
+    const chosen = avatarOf(current.avatar);
+    const name = current.identity?.full_name || "";
+    const letters = name.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join("").toUpperCase() || "?";
+    const picture = chosen ? `<img src="${AVATAR_BASE}${esc(chosen.id)}.webp" alt="" width="64" height="64">` : esc(letters);
+    return `<div class="profile-avatar" id="profileAvatar"><span class="profile-avatar-img" aria-hidden="true">${picture}</span>
+      <div><b>${chosen ? esc(chosen.title) : "Aucun avatar"}</b><p class="muted small">${chosen ? esc(chosen.job)
+        : "Choisis un badge métier : il s’affiche dans la barre du haut."}</p></div>
+      <button class="btn sm" type="button" id="profileAvatarPick" ${avatars.length ? "" : "disabled"}>${chosen ? "Changer" : "Choisir un avatar"}</button></div>`;
+  }
+
+  function openAvatarPicker() {
+    const groups = [...new Set(avatars.map(item => item.group))];
+    openDialog(`<div class="m-pad"><h2 id="dialogTitle">Choisir un avatar</h2>
+      <p class="muted small">Il s’affiche dans la barre du haut et sur ton profil. Il n’apparaît pas dans tes CV ni tes lettres.</p>
+      <div class="avatar-groups">${groups.map(group => `<h3>${esc(group)}</h3><div class="avatar-grid">${avatars
+        .filter(item => item.group === group).map(item => `<button type="button" class="avatar-choice" data-avatar-pick="${esc(item.id)}"
+          aria-pressed="${item.id === current.avatar}" title="${esc(item.title)}"><img src="${AVATAR_BASE}${esc(item.id)}.webp" alt=""
+          width="72" height="72" loading="lazy"><span>${esc(item.job)}</span></button>`).join("")}</div>`).join("")}</div></div>
+      <div class="m-foot">${current.avatar ? `<button class="btn ghost" type="button" data-avatar-pick="">Retirer l’avatar</button>` : ""}
+        <button class="btn" type="button" data-dialog-close>Fermer</button></div>`);
+    document.querySelector("[data-dialog-close]").onclick = closeDialog;
+    document.querySelectorAll("[data-avatar-pick]").forEach(button => (button.onclick = () => runOnce(button, async () => {
+      const avatar = button.dataset.avatarPick;
+      // Enregistré tout de suite, sans redessiner la page : les champs d'identité en cours de saisie sont conservés.
+      current = await api("/api/profile", { method: "PUT", body: { avatar } });
+      versions = await api("/api/profile/versions");
+      closeDialog();
+      document.querySelector("#profileAvatar").outerHTML = avatarBlock();
+      bindAvatar();
+      window.JobRadarAuth?.setAvatar?.(current.avatar);
+      toast(avatar ? "Avatar mis à jour" : "Avatar retiré");
+    })));
+  }
+
+  function bindAvatar() {
+    const button = document.querySelector("#profileAvatarPick");
+    if (button) button.onclick = openAvatarPicker;
+  }
 
   // Même classement que le serveur (profile._link_label) : LinkedIn, GitHub, sinon Portfolio.
   function linkLabel(link) {
@@ -155,6 +210,7 @@
       </section>
       <div class="profile-layout"><div class="profile-main">
         <section class="panel"><div class="sec-head"><h2>Identité et présentation</h2><button class="btn sm primary" id="profileSave">Enregistrer</button></div>
+          ${avatarBlock()}
           <form id="profileIdentity"><div class="row-2">
             <label class="field"><span>Nom complet</span><input name="full_name" value="${esc(identity.full_name)}"></label>
             <label class="field"><span>E-mail</span><input name="email" type="email" value="${esc(identity.email)}"></label>
@@ -245,7 +301,7 @@
     nav.classList.add("on");
     root.innerHTML = `<div class="panel"><p class="muted">Chargement du profil…</p></div>`;
     try {
-      [current, versions] = await Promise.all([api("/api/profile"), api("/api/profile/versions")]);
+      [current, versions] = await Promise.all([api("/api/profile"), api("/api/profile/versions"), loadAvatars()]);
       render();
     } catch (error) {
       root.innerHTML = `<div class="e-note err" role="alert"><b>Profil indisponible.</b> ${esc(error.message)}</div>`;
@@ -261,6 +317,7 @@
   }
 
   function bind() {
+    bindAvatar();
     document.querySelector("#profileImportToggle").onclick = () => {
       const panel = document.querySelector("#profileImportPanel");
       panel.hidden = !panel.hidden;
