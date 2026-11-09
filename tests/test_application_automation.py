@@ -87,13 +87,20 @@ def test_motivation_accepts_real_world_offer_title(monkeypatch) -> None:
 def test_factual_answer_requires_confidence_source_and_existing_option(monkeypatch) -> None:
     pending = {"selector": "#notice", "label": "Préavis", "kind": "missing_required", "input_kind": "select",
                "options": ["Un mois", "Deux mois"], "classification": "factual", "maxlength": None}
+    # Réponse type mémorisée : reprise en local, sans appel IA (l'IA ne voit jamais les réponses types).
+    monkeypatch.setattr(adapters.ai, "ask_ai", lambda *args: pytest.fail("appel IA inutile"))
+    result = adapters.ai_plan({"values": [], "interventions": [pending], "ready": False}, _candidate(), {})
+    assert result["ready"] and result["values"][0]["source"] == "profil:reponse_type"
+    # Sans réponse type : l'IA répond, mais seulement avec un fait du profil et une option existante.
+    professional = {"identity": {"full_name": "Alice Martin"}, "skills": [{"name": "Python"}],
+                    "summary_notice": "Un mois"}
     monkeypatch.setattr(adapters.ai, "ask_ai", lambda *args: {"answers": [{"selector": "#notice",
         "answer": "Un mois", "confidence": .95, "profile_source": "Un mois"}]})
-    result = adapters.ai_plan({"values": [], "interventions": [pending], "ready": False}, _candidate(), {})
+    result = adapters.ai_plan({"values": [], "interventions": [pending], "ready": False}, professional, {})
     assert result["ready"] and result["values"][0]["source"] == "ia:profil"
     monkeypatch.setattr(adapters.ai, "ask_ai", lambda *args: {"answers": [{"selector": "#notice",
         "answer": "Trois mois", "confidence": .99, "profile_source": "Un mois"}]})
-    assert not adapters.ai_plan({"values": [], "interventions": [pending], "ready": False}, _candidate(), {})["ready"]
+    assert not adapters.ai_plan({"values": [], "interventions": [pending], "ready": False}, professional, {})["ready"]
 
 
 def test_memory_ignores_sensitive_and_existing_answers(data_dir) -> None:

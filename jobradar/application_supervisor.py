@@ -229,25 +229,28 @@ def profile_values(candidate: dict) -> dict[str, str]:
 DOCUMENT_FACT_KEYS = ["first_name", "last_name", "full_name", "email", "phone", "address", "postal_code", "city",
                       "country", "linkedin", "github", "website", "school", "degree", "graduation", "languages",
                       "current_position"]
+# Seules ces clés passent par l'IA, sur un texte dont les coordonnées sont masquées ; les coordonnées
+# (e-mail, téléphone, liens, adresse) sont relevées localement par ``_local_contact_facts``.
+AI_FACT_KEYS = ["school", "degree", "graduation", "languages", "current_position"]
 FACTS_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {"facts": {"type": "array", "items": {
         "type": "object", "additionalProperties": False,
-        "properties": {"key": {"type": "string", "enum": DOCUMENT_FACT_KEYS},
+        "properties": {"key": {"type": "string", "enum": AI_FACT_KEYS},
                        "value": {"type": "string", "description": "copié mot pour mot depuis le document"}},
         "required": ["key", "value"]}}},
     "required": ["facts"],
 }
 FACTS_PROMPT = """Tu lis le CV et la lettre de motivation d'un candidat pour remplir un formulaire de candidature.
-Relève uniquement les informations de contact et de formation demandées par les clés autorisées.
+Relève uniquement les informations de formation et la situation actuelle demandées par les clés autorisées.
+Les coordonnées du candidat sont remplacées par des marqueurs ({{NOM}}, {{EMAIL}}…) : ignore-les.
 Chaque valeur doit être COPIÉE MOT POUR MOT depuis le texte (même orthographe, mêmes espaces) :
 n'invente rien, ne reformule rien, ne complète rien. Omets une clé absente du texte.
-Pour linkedin, github et website, copie l'adresse telle qu'elle est écrite.
 Pour graduation, l'année d'obtention prévue du diplôme en cours.
 Pour current_position, la situation actuelle écrite dans la section profil ou résumé (« Élève ingénieur en
 cybersécurité », « Étudiant ingénieur informatique »), jamais le titre visé placé en tête du CV ni le poste de l'offre.
 """
-FACTS_VERSION = "2"  # change quand les clés relevées changent : le cache des documents est alors relu
+FACTS_VERSION = "3"  # change quand les clés relevées changent : le cache des documents est alors relu
 PHONE_PREFIXES = {"33": "France", "32": "Belgique", "41": "Suisse", "352": "Luxembourg"}
 
 
@@ -289,8 +292,34 @@ def _pdf_links(path: Path) -> str:
     return "\nLiens : " + " ".join(dict.fromkeys(uris)) if uris else ""
 
 
-def document_facts(files: dict[str, str], cache_dir: Path | None = None) -> dict[str, str]:
-    """Faits non sensibles relevés par l'IA dans le CV et la lettre envoyés, vérifiés mot pour mot."""
+_ADDRESS = re.compile(r"\b\d{1,4}(?:\s?(?:bis|ter))?,?\s+(?:rue|avenue|av\.|boulevard|bd|all[ée]e|impasse|chemin|"
+                      r"place|quai|route|cours|square|r[ée]sidence)\b[^\n,·|•]{2,60}", re.I)
+
+
+_POSTAL_CITY_LINE = re.compile(r"\b(\d{5})\s+([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ' -]{1,40}?)\s*(?:$|[,|·•;(])", re.M)
+
+
+def _local_contact_facts(text: str) -> dict[str, str]:
+    """Coordonnées lues dans le CV sans aucun appel IA : e-mail, téléphone, liens, adresse, code postal, ville."""
+    facts = {}
+    if email := profile._EMAIL.search(text):
+        facts["email"] = email.group(0)
+    if phone := profile._PHONE.search(text):
+        facts["phone"] = phone.group(0).strip()
+    for match in profile._URL.finditer(text):
+        url = match.group(0).rstrip(".,;)")
+        key = "linkedin" if "linkedin" in url.casefold() else "github" if "github" in url.casefold() else "website"
+        facts.setdefault(key, url)
+    if address := _ADDRESS.search(text):
+        facts["address"] = " ".join(address.group(0).split())
+    if postal := _POSTAL_CITY_LINE.search(text):
+        facts["postal_code"], facts["city"] = postal.group(1), postal.group(2).strip()
+    return facts
+
+
+def document_facts(files: dict[str, str], cache_dir: Path | None = None,
+                   identity: dict | None = None) -> dict[str, str]:
+    """Faits relevés dans le CV et la lettre envoyés : coordonnées en local, formation par l'IA sur texte masqué."""
     texts = []
     for kind in FILES:
         if files.get(kind):
@@ -311,12 +340,17 @@ def document_facts(files: dict[str, str], cache_dir: Path | None = None) -> dict
     except (OSError, ValueError, KeyError):
         pass
     try:
-        raw = ai.ask_ai(FACTS_PROMPT + "\nDOCUMENTS :\n" + text, FACTS_SCHEMA, "tailoring") or {}
+        masked = profile.mask_identity(text, identity or {})
+        # Adresse et code postal absents du profil : masqués aussi, par leur forme.
+        masked = re.sub(r"\b\d{5}\s+[^\n,·|•]{1,40}", "{{CODE_POSTAL}} {{VILLE}}", _ADDRESS.sub("{{ADRESSE}}", masked))
+        raw = ai.ask_ai(FACTS_PROMPT + "\nDOCUMENTS :\n" + masked, FACTS_SCHEMA, "tailoring") or {}
     except ai.AIError as exc:
         raise SupervisionError(str(exc)) from exc
-    facts = {}
+    facts = _local_contact_facts(text)
     for item in raw.get("facts") or []:
         key, value = item.get("key"), str(item.get("value") or "").strip()
+        if key not in AI_FACT_KEYS:
+            continue
         if key == "current_position" and NOT_CURRENT_WORDS & set(_fold(value).split()):
             continue  # « Stagiaire Pentester » en tête du CV : le poste visé, pas le poste actuel
         if key in DOCUMENT_FACT_KEYS and key not in facts and value and _in_documents(key, value, text):

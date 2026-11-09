@@ -1608,7 +1608,8 @@ class _Supervision:
         if not self.available or not files:
             return {}
         try:
-            facts = application_supervisor.document_facts(files, self.journal.directory)
+            facts = application_supervisor.document_facts(files, self.journal.directory,
+                                                           (self.candidate or {}).get("identity"))
         except application_supervisor.SupervisionError as exc:
             self.journal.note(f"Lecture du CV et de la lettre impossible, profil seul : {exc}")
             return {}

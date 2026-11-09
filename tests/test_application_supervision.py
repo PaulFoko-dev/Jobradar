@@ -164,20 +164,23 @@ def test_document_facts_keep_only_what_the_cv_really_says(monkeypatch, tmp_path)
 
     def fake(prompt, schema, _task):
         calls.append(prompt)
-        assert schema is application_supervisor.FACTS_SCHEMA and "linkedin.com/in/paul-foko" in prompt
-        return {"facts": [{"key": "linkedin", "value": "https://www.linkedin.com/in/paul-foko/"},
-                          {"key": "address", "value": "12 rue des Lilas, 75011 Paris"},
-                          {"key": "phone", "value": "07 63 95 67 80"},  # chiffres absents tels quels : refusé
-                          {"key": "email", "value": "paul.invente@example.test"},  # inventé : refusé
-                          {"key": "school", "value": "3IL ingénieurs"}]}
+        assert schema is application_supervisor.FACTS_SCHEMA
+        # Contrat aveugle : aucune coordonnée du candidat ne part vers l'IA.
+        for private in ("FOKO", "Lilas", "paulfoko21", "63 95", "linkedin.com/in/paul-foko"):
+            assert private not in prompt, private
+        return {"facts": [{"key": "email", "value": "paul.invente@example.test"},  # clé hors contrat : ignorée
+                          {"key": "school", "value": "3IL ingénieurs"},
+                          {"key": "degree", "value": "Ingénieur inventé"}]}  # absent du texte : refusé
 
     monkeypatch.setattr(ai, "ask_ai", fake)
+    identity = {"full_name": "Paul FOKO"}
 
-    facts = application_supervisor.document_facts({"cv": str(cv)}, tmp_path / "envoi")
+    facts = application_supervisor.document_facts({"cv": str(cv)}, tmp_path / "envoi", identity)
 
-    assert facts == {"linkedin": "https://www.linkedin.com/in/paul-foko/",
-                     "address": "12 rue des Lilas, 75011 Paris", "school": "3IL ingénieurs"}
-    assert application_supervisor.document_facts({"cv": str(cv)}, tmp_path / "envoi") == facts
+    assert facts == {"email": "paulfoko21@gmail.com", "phone": "+33 7 63 95 67 80",
+                     "linkedin": "linkedin.com/in/paul-foko", "address": "12 rue des Lilas",
+                     "postal_code": "75011", "city": "Paris", "school": "3IL ingénieurs"}
+    assert application_supervisor.document_facts({"cv": str(cv)}, tmp_path / "envoi", identity) == facts
     assert len(calls) == 1  # documents inchangés : relus depuis le cache, sans nouvel appel IA
 
 
