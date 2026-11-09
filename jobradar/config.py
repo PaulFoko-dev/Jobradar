@@ -83,7 +83,8 @@ DEFAULT_CONFIG = {
     # Lecture locale de la boîte de réception (réponses des recruteurs, accusés de réception) ; désactivée par défaut.
     "inbox": {"enabled": False, "imap_host": "", "days": 30},
     "browser": {"engine": "system", "executable": "", "cdp_port": 9333, "keep_open": True,
-                "ai_supervision": "always", "human_wait_minutes": 10, "auto_accounts": False},
+                "ai_supervision": "always", "human_wait_minutes": 10, "auto_accounts": False,
+                "google_sign_in": True},
     # Nombre d'offres envoyées à Claude par appel, et appels en parallèle.
     "scoring_batch_size": 4,
     "scoring_parallel": 3,
@@ -175,7 +176,8 @@ def browser_settings(cfg: dict | None = None) -> dict:
     wait = wait if isinstance(wait, int) and not isinstance(wait, bool) and 1 <= wait <= 60 else 10
     return {"engine": engine, "executable": executable, "cdp_port": port,
             "keep_open": keep_open if isinstance(keep_open, bool) else True, "ai_supervision": supervision,
-            "human_wait_minutes": wait, "auto_accounts": raw.get("auto_accounts") is True}
+            "human_wait_minutes": wait, "auto_accounts": raw.get("auto_accounts") is True,
+            "google_sign_in": raw.get("google_sign_in") is not False}
 
 
 # Navigateurs pilotables (Chromium) : nom affiché, mots qui les reconnaissent comme navigateur par défaut,
@@ -271,7 +273,7 @@ def default_browser_name() -> str | None:
 
 def save_browser_settings(value: dict) -> dict:
     unknown = set(value) - {"engine", "executable", "cdp_port", "keep_open", "ai_supervision", "human_wait_minutes",
-                            "auto_accounts"}
+                            "auto_accounts", "google_sign_in"}
     if unknown:
         raise ValueError("Réglage navigateur inconnu.")
     merged = browser_settings() | value

@@ -13,8 +13,8 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
-from urllib.request import urlopen
+from urllib.parse import parse_qsl, quote, unquote, urljoin, urlsplit
+from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import Error as PlaywrightError
@@ -145,13 +145,70 @@ def _start_browser(browser: dict, port: int, *, retried: bool = False) -> None:
     raise BrowserUnavailable(f"{browser['name']} n'a pas ouvert son port de connexion dans le délai imparti.")
 
 
-def open_system_browser(playwright=None) -> dict:
-    """Ouvre le navigateur dédié s'il ne tourne pas déjà ; renvoie le navigateur et son port."""
+def open_system_browser(playwright=None, url: str | None = None) -> dict:
+    """Ouvre le navigateur dédié s'il ne tourne pas déjà (sur ``url`` si donnée) ; renvoie le navigateur et son port."""
     port = config.browser_settings()["cdp_port"]
     browser = system_browser(playwright)
     if not _port_open(port):
         _start_browser(browser, port)
+    if url:
+        try:  # nouvel onglet via le protocole de débogage (navigateur déjà ouvert ou tout juste lancé)
+            request = Request(f"http://127.0.0.1:{port}/json/new?{quote(url, safe=':/?=&')}", method="PUT")
+            urlopen(request, timeout=10).close()
+        except OSError:
+            LOGGER.warning("Onglet %s non ouvert dans le navigateur dédié", url, exc_info=True)
     return browser | {"port": port}
+
+
+GOOGLE_SIGN_IN = "https://accounts.google.com/"
+GOOGLE_BUTTON = re.compile(r"(continuer|se connecter|connexion|s'inscrire|inscription|sign in|sign up|continue|log in)"
+                           r"\s+(avec|with|via)\s+google", re.I)
+
+
+def _try_google_sign_in(page, supervision) -> bool:
+    """« Continuer avec Google » quand le navigateur de JobRadar a une session Google : le compte du profil (ou le
+    seul compte connecté) est choisi ; mot de passe ou double authentification demandés = étape humaine."""
+    if not config.browser_settings().get("google_sign_in", True):
+        return False
+    try:
+        button = page.get_by_role("button", name=GOOGLE_BUTTON)
+        button = button if button.count() else page.get_by_role("link", name=GOOGLE_BUTTON)
+        frame_button = None
+        if not button.count():  # bouton officiel Google Identity Services, affiché dans un cadre
+            frames = [frame for frame in page.frames if "accounts.google.com/gsi" in frame.url]
+            frame_button = frames[0].locator("[role=button], div[tabindex]").first if frames else None
+            if frame_button is None or not frame_button.count():
+                return False
+        context, before = page.context, set(page.context.pages)
+        (frame_button if frame_button is not None else button.first).click(timeout=10_000)
+        page.wait_for_timeout(2_500)
+        google = next((tab for tab in set(context.pages) - before), None) or page
+        if "accounts.google.com" not in google.url:
+            return False
+        email = str(supervision.values.get("email") or "").casefold()
+        accounts = google.locator("[data-identifier]")
+        if not accounts.count():
+            supervision.journal.note("Connexion Google proposée, mais aucun compte Google n'est connecté dans le "
+                                     "navigateur de JobRadar.")
+            return False
+        chosen = next((accounts.nth(i) for i in range(accounts.count())
+                       if (accounts.nth(i).get_attribute("data-identifier") or "").casefold() == email), None)
+        if chosen is None and accounts.count() == 1:
+            chosen = accounts.first
+        if chosen is None:
+            return False  # plusieurs comptes, aucun ne correspond au profil : c'est à toi de choisir
+        chosen.click(timeout=10_000)
+        page.wait_for_timeout(2_500)  # la fenêtre Google se ferme souvent d'elle-même après le choix du compte
+        if not google.is_closed() and google.locator('input[type="password"]').count():
+            return False  # session expirée : mot de passe à saisir par toi
+        consent = google.get_by_role("button", name=re.compile(r"^(continuer|continue|autoriser|allow)$", re.I))
+        if not google.is_closed() and consent.count():
+            consent.first.click(timeout=10_000)
+            page.wait_for_timeout(2_500)
+        supervision.journal.note("Connexion avec le compte Google du navigateur de JobRadar.")
+        return True
+    except PlaywrightError:
+        return False
 
 
 def _unfreeze_tabs(port: int) -> list[str]:
@@ -935,7 +992,9 @@ def _wait_for_user(page, attempt: dict, provider: str, supervision, kind: str):
     """
     minutes = config.browser_settings()["human_wait_minutes"]
     deadline = time.monotonic() + minutes * 60
-    if kind == "account_creation" and config.browser_settings().get("auto_accounts") and _create_account(page, supervision):
+    if kind in {"login", "account_creation"} and _try_google_sign_in(page, supervision):
+        kind = "login"  # Google a pris le relais : on surveille la suite comme une connexion
+    elif kind == "account_creation" and config.browser_settings().get("auto_accounts") and _create_account(page, supervision):
         kind = "login"  # la suite (code de vérification, connexion) se poursuit comme une connexion
     filled = _prefill_known(page, supervision, login=kind == "login") if kind in {"login", "account_creation"} else []
     message = (f"{HUMAN_STEP_MESSAGES.get(kind, HUMAN_STEP_MESSAGES['login'])[:1].upper()}"
@@ -2056,7 +2115,8 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
             supervision.journal.decision(page, snap, decision, ["connexion ou vérification requise"])
             if not login_attempted:
                 login_attempted = True
-                if _try_login(page):
+                if _try_login(page) or _try_google_sign_in(page, supervision):
+                    supervision.last_hash = None
                     continue
             outcome, page = _wait_for_user(page, attempt, provider, supervision, kind)
             if outcome == "ready":
@@ -2313,7 +2373,7 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
             logged_in = False
             if not login_attempted:
                 login_attempted = True
-                logged_in = _try_login(page)
+                logged_in = _try_login(page) or _try_google_sign_in(page, supervision)
             if not logged_in:
                 outcome, page = _wait_for_user(page, attempt, provider, supervision, _human_step_kind(page, visible))
                 if outcome != "ready":

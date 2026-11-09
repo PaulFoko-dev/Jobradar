@@ -164,3 +164,44 @@ def test_account_is_created_automatically_and_its_password_stored_for_that_site_
         assert page.evaluate("document.body.dataset.done") == "1"
         browser.close()
     assert stored == [("acme.wd3.myworkdayjobs.com", "camille@example.test", 24)]
+
+
+def _google_world(page, accounts: list[str]) -> None:
+    site = """<button id="g" onclick="window.open('https://accounts.google.com/o/oauth2/auth', 'g', 'width=500')">
+      Continuer avec Google</button><p id="state">déconnecté</p>
+      <script>window.addEventListener('message', e => document.querySelector('#state').textContent = e.data);</script>"""
+    chooser = "<h1>Choisissez un compte</h1>" + "".join(
+        f"<div data-identifier='{email}' role='link' onclick=\"window.opener.postMessage('connecté:{email}', '*'); "
+        f"window.close()\">{email}</div>" for email in accounts)
+    page.context.route("https://jobs.example.com/**", lambda route: route.fulfill(body=site, content_type="text/html; charset=utf-8"))
+    page.context.route("https://accounts.google.com/**", lambda route: route.fulfill(body=chooser, content_type="text/html; charset=utf-8"))
+
+
+def test_google_account_of_the_profile_is_used_to_sign_in(monkeypatch) -> None:
+    from playwright.sync_api import sync_playwright
+
+    monkeypatch.setattr(application_browser.config, "browser_settings", lambda: {"google_sign_in": True})
+
+    class Journal:
+        notes = []
+
+        def note(self, text):
+            self.notes.append(text)
+
+    supervision = type("S", (), {"values": {"email": "camille@gmail.com"}, "journal": Journal()})()
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        _google_world(page, ["perso@gmail.com", "camille@gmail.com"])
+        page.goto("https://jobs.example.com/login")
+        assert application_browser._try_google_sign_in(page, supervision)
+        page.wait_for_timeout(300)
+        assert page.inner_text("#state") == "connecté:camille@gmail.com"
+
+        other = browser.new_page()
+        _google_world(other, ["a@gmail.com", "b@gmail.com"])  # plusieurs comptes, aucun ne correspond : on n'en choisit pas
+        other.goto("https://jobs.example.com/login")
+        assert not application_browser._try_google_sign_in(other, supervision)
+        browser.close()
+    monkeypatch.setattr(application_browser.config, "browser_settings", lambda: {"google_sign_in": False})
+    assert not application_browser._try_google_sign_in(None, supervision)  # option désactivée : rien n'est tenté

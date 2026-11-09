@@ -2640,6 +2640,9 @@ function browserSettingsHtml() {
       de candidature (Workday…) : ton e-mail, un mot de passe fort rangé pour ce seul site, les conditions du compte acceptées</label>
     <button class="btn primary" id="bSave">Enregistrer</button>
     <button class="btn" id="bOpen" title="Ouvre le navigateur avec le profil réservé à JobRadar : connecte-toi une fois à tes comptes, il s'en souviendra.">Ouvrir le navigateur pour me connecter</button>
+    <button class="btn" id="bGoogle" type="button">Connecter un compte Google</button>
+    <label class="vault-check"><input id="bGoogleAuto" type="checkbox"> Utiliser le compte Google du navigateur de JobRadar
+      pour les « Continuer avec Google » des sites de candidature</label>
     <p class="muted small">Ton profil habituel ne peut pas être piloté (protection des navigateurs) : JobRadar utilise un profil à part. Connecte-toi une fois à tes comptes (Google, HelloWork, Workday, Welcome to the Jungle…) dans cette fenêtre. En terminal : <code>python -m jobradar.cli navigateur</code>.</p></fieldset>
     <fieldset class="e-group"><legend>Identifiant par domaine</legend>
     <label>Domaine <input id="lDomain" placeholder="careers.example.com"></label>
@@ -2650,7 +2653,7 @@ function browserSettingsHtml() {
 
 async function loadBrowserSettings() {
   const s = await api("/api/settings/browser");
-  $("#bEngine").value = s.engine; $("#bExecutable").value = s.executable || ""; $("#bPort").value = s.cdp_port; $("#bWait").value = s.human_wait_minutes ?? 10; $("#bAccounts").checked = Boolean(s.auto_accounts);
+  $("#bEngine").value = s.engine; $("#bExecutable").value = s.executable || ""; $("#bPort").value = s.cdp_port; $("#bWait").value = s.human_wait_minutes ?? 10; $("#bAccounts").checked = Boolean(s.auto_accounts); $("#bGoogleAuto").checked = s.google_sign_in !== false;
   const found = s.system_browser, standard = s.default_browser;
   $("#bDetected").textContent = !found ? "Aucun navigateur compatible trouvé : JobRadar utilisera son Chromium intégré."
     : found.is_default ? `Navigateur utilisé : ${found.name} (ton navigateur par défaut).`
@@ -2659,7 +2662,8 @@ async function loadBrowserSettings() {
   const render = accounts => { $("#lAccounts").innerHTML = accounts.map(a => `<li class="file"><span>${esc(a.domain)} — ${esc(a.username)}</span><button class="btn sm ghost" data-domain="${esc(a.domain)}">Supprimer</button></li>`).join("") || `<li class="muted small">Aucun identifiant.</li>`;
     $$("#lAccounts [data-domain]").forEach(b => b.onclick = async () => { await api(`/api/settings/logins/${encodeURIComponent(b.dataset.domain)}`, {method:"DELETE"}); loadBrowserSettings(); }); };
   render(s.accounts);
-  $("#bSave").onclick = async () => { await api("/api/settings/browser", {method:"PUT", body:{engine:$("#bEngine").value, executable:$("#bExecutable").value, cdp_port:Number($("#bPort").value), human_wait_minutes:Number($("#bWait").value), auto_accounts:$("#bAccounts").checked}}); toast("Navigateur enregistré"); };
+  $("#bSave").onclick = async () => { await api("/api/settings/browser", {method:"PUT", body:{engine:$("#bEngine").value, executable:$("#bExecutable").value, cdp_port:Number($("#bPort").value), human_wait_minutes:Number($("#bWait").value), auto_accounts:$("#bAccounts").checked, google_sign_in:$("#bGoogleAuto").checked}}); toast("Navigateur enregistré"); };
+  $("#bGoogle").onclick = () => window.JobRadarGoogle?.open();
   $("#bOpen").onclick = async () => {
     const b = $("#bOpen"); b.disabled = true;
     try { const r = await api("/api/settings/browser/open", {method:"POST"}); toast(`${r.name} ouvert : connecte-toi à tes comptes.`); }

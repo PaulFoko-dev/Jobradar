@@ -1300,6 +1300,7 @@ class BrowserSettingsIn(BaseModel):
     ai_supervision: Literal["always", "fallback", "off"] | None = None
     human_wait_minutes: StrictInt | None = Field(None, ge=1, le=60)
     auto_accounts: StrictBool | None = None
+    google_sign_in: StrictBool | None = None
 
 
 class LoginIn(BaseModel):
@@ -1327,6 +1328,17 @@ def open_browser():
     from . import application_browser
     try:
         browser = application_browser.open_system_browser()
+    except application_browser.BrowserUnavailable as exc:
+        raise HTTPException(409, str(exc))
+    return {"ok": True, "name": browser["name"]}
+
+
+@app.post("/api/settings/browser/google")
+def open_browser_on_google():
+    """Ouvre le navigateur de JobRadar sur la connexion Google : la session servira aux « Continuer avec Google »."""
+    from . import application_browser
+    try:
+        browser = application_browser.open_system_browser(url=application_browser.GOOGLE_SIGN_IN)
     except application_browser.BrowserUnavailable as exc:
         raise HTTPException(409, str(exc))
     return {"ok": True, "name": browser["name"]}
