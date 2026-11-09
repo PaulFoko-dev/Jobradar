@@ -348,6 +348,7 @@ function openEditor(search = null) {
   if (search) renderCriteria(search.name);
   else $("#criteriaPanel").hidden = true;
   showView("viewEditor");
+  if (search) setTopTitle("Modifier la recherche");
   loadSearches();
 }
 window.openEditor = openEditor;
@@ -2552,6 +2553,15 @@ function emailSettingsHtml() {
               <span>${esc(label)} <small class="muted">${esc(hint())}</small></span></label>`).join("")}
         </div>
       </fieldset>
+
+      <fieldset class="e-group">
+        <legend>Boîte de réception</legend>
+        <label class="vault-check"><input type="checkbox" id="iEnabled"> Lire ma boîte de réception (en local) pour repérer
+          les réponses des recruteurs, confirmer les envois et récupérer les codes de vérification des sites</label>
+        <p class="muted small">Même compte que l'envoi ci-dessus (serveur IMAP déduit, lecture seule : rien n'est marqué comme lu).
+          Rien n'est envoyé à l'IA. Enregistré dès que tu coches la case.</p>
+        <div class="arch-row"><button class="btn sm" id="iScan" type="button">Vérifier ma boîte maintenant</button></div>
+      </fieldset>
       <div id="eStatus" class="e-status" aria-live="polite"></div>
     </div>
     <div class="m-foot">
@@ -2779,7 +2789,25 @@ async function openEmailSettings() {
   $("#eEnabled").onchange = syncEnabledHint;
   $("#eSave").onclick = e => saveEmailSettings(e.currentTarget);
   $("#eTest").onclick = e => testEmail(e.currentTarget);
+  bindInboxSettings();
   $(`#set-tab-${tab}`).focus();
+}
+
+// Lecture de la boîte de réception : même compte que les alertes, d'où sa place dans cet onglet.
+function bindInboxSettings() {
+  api("/api/inbox").then(inboxState => ($("#iEnabled").checked = inboxState.enabled)).catch(() => {});
+  $("#iEnabled").onchange = async event => {
+    try { await api("/api/inbox", { method: "PUT", body: { enabled: event.target.checked } }); toast("Réglage enregistré"); }
+    catch (error) { toast(error.message, 5000); event.target.checked = !event.target.checked; }
+  };
+  $("#iScan").onclick = async event => {
+    try {
+      const done = await busy(event.currentTarget, "Lecture…", () => api("/api/inbox/scan", { method: "POST" }));
+      toast(done.enabled ? `${done.messages} message(s) lus : ${done.proposals} réponse(s) proposée(s), ${done.confirmed} envoi(s) confirmé(s)`
+        : "Active d'abord la lecture de la boîte de réception.", 6000);
+      loadNotifs();
+    } catch (error) { toast(error.message, 6000); }
+  };
 }
 
 // ------------------------------------------------------------------ réglages : archives et sauvegarde
@@ -2798,9 +2826,6 @@ function archivesSettingsHtml() {
           à l'IA (jamais l'identité ni les coordonnées)</label>
         <div class="arch-row"><button class="btn" id="vOpen" hidden>Activer le coffre</button>
           <button class="btn" id="vMigrate" hidden>Chiffrer les données restantes</button></div>
-        <label class="vault-check"><input type="checkbox" id="iEnabled"> Lire ma boîte de réception (en local) pour repérer
-          les réponses des recruteurs et confirmer les envois : même compte que l'e-mail ci-dessous, rien n'est envoyé à l'IA</label>
-        <div class="arch-row"><button class="btn sm" id="iScan">Vérifier ma boîte maintenant</button></div>
         <div id="vPlain" hidden><p class="e-note warn small"><b>Sauvegardes antérieures au coffre, en clair :</b> <span id="vPlainList"></span></p>
           <div class="arch-row"><button class="btn danger" id="vPlainDelete">Supprimer ces sauvegardes en clair</button></div></div>
       </fieldset>
@@ -2908,19 +2933,6 @@ function bindArchivesSettings() {
       toast(`${done.deleted} sauvegarde(s) en clair supprimée(s)`);
       $("#vPlain").hidden = true;
     } catch (error) { toast(error.message, 5000); }
-  };
-  api("/api/inbox").then(inboxState => ($("#iEnabled").checked = inboxState.enabled)).catch(() => {});
-  $("#iEnabled").onchange = async event => {
-    try { await api("/api/inbox", { method: "PUT", body: { enabled: event.target.checked } }); toast("Réglage enregistré"); }
-    catch (error) { toast(error.message, 5000); event.target.checked = !event.target.checked; }
-  };
-  $("#iScan").onclick = async event => {
-    try {
-      const done = await busy(event.currentTarget, "Lecture…", () => api("/api/inbox/scan", { method: "POST" }));
-      toast(done.enabled ? `${done.messages} message(s) lus : ${done.proposals} réponse(s) proposée(s), ${done.confirmed} envoi(s) confirmé(s)`
-        : "Active d'abord la lecture de la boîte de réception.", 6000);
-      loadNotifs();
-    } catch (error) { toast(error.message, 6000); }
   };
   $("#vOpen").onclick = () => window.JobRadarVault?.open();
   $("#vMigrate").onclick = () => window.JobRadarVault?.migrate();
