@@ -37,10 +37,10 @@ def _render_cv(tmp_path: Path, composition: dict, identity: dict, template_id: s
                      out_dir=tmp_path, base_name=name)
 
 
-def test_list_templates_returns_three_independent_ats_templates() -> None:
+def test_list_templates_returns_independent_ats_templates() -> None:
     templates = list_templates()
-    assert [item["id"] for item in templates] == TEMPLATES
-    assert [item["name"] for item in templates] == ["Sobre ATS", "Moderne ATS", "Technique/Projets"]
+    assert [item["id"] for item in templates] == [*TEMPLATES, "latex-ats"]
+    assert [item["name"] for item in templates] == ["Sobre ATS", "Moderne ATS", "Technique/Projets", "LaTeX ATS"]
     assert all(item["ats"] is True and item["description"] for item in templates)
     templates[0]["name"] = "modifié"
     assert list_templates()[0]["name"] == "Sobre ATS"

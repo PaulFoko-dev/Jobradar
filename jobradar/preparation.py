@@ -174,8 +174,11 @@ def _recent_item(raw: dict) -> dict:
     item = view(raw)
     attempt = db.get_application_attempt(raw["attempt_id"]) if raw.get("attempt_id") else None
     sent = application_flow.already_sent(raw["application_id"])
+    preparation_resumable = raw["status"] == "failed" and attempt is None
     item.update(attempt=attempt, proofs={}, supervision=None, sent_by_hand=sent and attempt is not None
-                and attempt["status"] != "submitted", resumable=not sent and resumable(attempt))
+                and attempt["status"] != "submitted",
+                preparation_resumable=preparation_resumable,
+                resumable=not sent and (preparation_resumable or resumable(attempt)))
     try:
         proof = archive.directory_of(raw["application_id"]) / "envoi"
     except db.NotFound:  # archive absente ou déplacée : l'état reste affichable, sans preuves
@@ -191,6 +194,46 @@ def _recent_item(raw: dict) -> dict:
     except (OSError, ValueError):
         pass
     return item
+
+
+def activity(job_id: int) -> dict:
+    """Journal lisible d'une auto-candidature, de la mise en file jusqu'aux actions du navigateur."""
+    raw = db.get_preparation_job(job_id)
+    if raw["origin"] != "auto":
+        raise db.NotFound("Auto-candidature introuvable.")
+    job = view(raw)
+    attempt = db.get_application_attempt(raw["attempt_id"]) if raw.get("attempt_id") else None
+    events = [{"at": job["created_at_utc"], "level": "info", "label": "Ajoutée à la file",
+               "detail": "L'offre a été confiée au robot."}]
+    if job.get("started_at_utc"):
+        events.append({"at": job["started_at_utc"], "level": "info", "label": "Préparation démarrée",
+                       "detail": "Analyse de l'offre et adaptation des documents."})
+    if job.get("step"):
+        labels = {"prepare": "Rédaction des documents", "render": "Création et contrôle des fichiers",
+                  "apply": "Mise en file de l'envoi", "queued_for_submission": "Envoi assisté lancé",
+                  "manual": "Envoi manuel requis", "prepared": "Documents préparés"}
+        events.append({"at": job.get("finished_at_utc") or job.get("started_at_utc"), "level": "info",
+                       "label": labels.get(job["step"], job["step"]), "detail": f"État : {job['status']}."})
+    if job.get("error"):
+        events.append({"at": job.get("finished_at_utc"), "level": "error", "label": "Préparation arrêtée",
+                       "detail": job["error"]})
+    if attempt:
+        events.append({"at": attempt.get("created_at_utc"), "level": "info", "label": "Tentative d'envoi",
+                       "detail": f"Mode {attempt['mode']} · fournisseur {attempt['provider']} · état {attempt['status']}."})
+        intervention = attempt.get("intervention") or {}
+        if intervention.get("message"):
+            events.append({"at": attempt.get("updated_at_utc"), "level": "warning",
+                           "label": "Intervention nécessaire", "detail": intervention["message"]})
+        if attempt.get("error"):
+            events.append({"at": attempt.get("updated_at_utc"), "level": "error",
+                           "label": "Erreur d'envoi", "detail": attempt["error"]})
+    journal = ""
+    try:
+        path = archive.directory_of(raw["application_id"]) / "envoi" / "journal.md"
+        journal = path.read_text(encoding="utf-8")[-100_000:] if path.is_file() else ""
+    except (OSError, db.NotFound):
+        pass
+    return {"job_id": job_id, "application_id": raw["application_id"], "events": events, "journal": journal}
 
 
 # Relancer ces arrêts referait la même chose : offre close, déjà envoyée, site à finir à la main
@@ -209,9 +252,12 @@ def status(search_id: int) -> dict:
     if search is None:
         raise db.NotFound("Recherche introuvable.")
     today = db.auto_applied_offer_count(search_id, _local_midnight_utc())
+    recent = [_recent_item(raw) for raw in db.recent_auto_preparations(search_id)]
+    if any(item["status"] == "queued" for item in recent):
+        wake()  # rattrape un signal manqué sans recréer ni doubler la tâche
     return {"settings": search["auto_apply"], "today": today,
             "remaining_today": max(0, search["auto_apply"]["daily_limit"] - today),
-            "recent": [_recent_item(raw) for raw in db.recent_auto_preparations(search_id)]}
+            "recent": recent}
 
 
 def overview() -> dict:
@@ -231,6 +277,8 @@ def overview() -> dict:
         if item["application_id"] not in seen:
             seen.add(item["application_id"])
             latest.append(item)
+    if any(item["status"] == "queued" for item in latest):
+        wake()  # une consultation de la page réveille aussi une file restée en attente
     return {"searches": searches, "recent": latest}
 
 
@@ -239,7 +287,16 @@ def retry_all() -> dict:
     retried, seen = [], set()
     for item in overview()["recent"]:
         attempt = item["attempt"]
-        if not item["resumable"] or attempt["id"] in seen:
+        if not item["resumable"]:
+            continue
+        if item.get("preparation_resumable"):
+            try:
+                retry_preparation(item["id"])
+                retried.append(f"job:{item['id']}")
+            except db.Conflict:
+                pass
+            continue
+        if attempt["id"] in seen:
             continue
         seen.add(attempt["id"])
         try:
@@ -248,6 +305,16 @@ def retry_all() -> dict:
         except db.Conflict:
             pass
     return {"retried": len(retried)}
+
+
+def retry_preparation(job_id: int) -> dict:
+    """Recrée une préparation automatique échouée ; l'ancienne reste consultable dans le journal."""
+    job = db.get_preparation_job(job_id)
+    if job["origin"] != "auto" or job["status"] != "failed" or job.get("attempt_id") is not None:
+        raise db.Conflict("Cette préparation automatique ne peut pas être relancée.")
+    created = db.create_preparation_job(job["application_id"], origin="auto", params=job["params"])
+    wake()
+    return view(created)
 
 
 def schedule(search_id: int) -> list[int]:

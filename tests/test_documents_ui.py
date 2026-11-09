@@ -31,6 +31,11 @@ def test_public_contract_and_api_routes_are_present() -> None:
     assert "data-improve-document" in source
     assert "Générer une version améliorée" in source
     assert "/refine" in source
+    assert "data-template-document" in source
+    assert "Changer le modèle de" in source and "cette lettre" in source
+    assert 'method: "PATCH"' in source
+    assert "documentsListHtml" in source
+    assert "Autres versions" in source
 
 
 def test_dynamic_business_content_is_escaped_and_urls_are_constructed_locally() -> None:

@@ -199,7 +199,7 @@ function showView(id) {
 }
 
 function prefs(id) {
-  const def = { zone: "flex", zoneThr: 75, min: 40, status: "active", source: "", sort: "score", noNationality: true };
+  const def = { zone: "flex", zoneThr: 75, min: 40, status: "active", source: "", sort: "score", noNationality: true, hideApplied: false };
   try { return { ...def, ...JSON.parse(localStorage.getItem(`jr-prefs-${id}`) || "{}") }; } catch { return def; }
 }
 function savePrefs(id, p) {
@@ -465,7 +465,14 @@ function autoApplyResult(job) {
   const attempt = job.attempt;
   const reason = attempt?.intervention?.message || job.error || "";
   if (job.sent_by_hand) return "Envoyée par toi ✓ (marquée dans le suivi)";
-  if (!attempt) return job.status === "failed" ? `Préparation arrêtée : ${reason}` : "Préparation en cours…";
+  if (!attempt) {
+    if (job.status === "failed") return `Préparation arrêtée : ${reason}`;
+    if (job.status === "queued") return "En attente de démarrage…";
+    if (job.status === "running") return `Préparation en cours · ${autoApplyStepLabel(job)}…`;
+    if (job.step === "manual") return "Documents prêts · envoi manuel requis";
+    if (job.status === "done") return "Préparation terminée sans envoi assisté";
+    return autoApplyStepLabel(job);
+  }
   if (attempt.status === "submitted") return "Envoyée ✓";
   if (attempt.status === "needs_user") return `À finir toi-même : ${reason}`;
   const waiting = job.supervision?.waiting;
@@ -491,8 +498,10 @@ function autoApplyItem(job) {
     ${job.search_name ? `<span class="aa-search muted">${esc(job.search_name)}</span>` : ""}
     <span class="aa-result">${esc(autoApplyResult(job))}</span>
     ${job.supervision?.understanding ? `<span class="aa-ai">IA : ${esc(job.supervision.understanding)}</span>` : ""}
+    <button class="link" type="button" data-aa-log="${esc(job.id)}">Journal du robot</button>
     <button class="link" type="button" data-aa-app="${esc(job.application_id)}">Voir la candidature</button>
-    ${job.resumable ? `<button class="link" type="button" data-aa-retry="${attempt.id}">${attempt.intervention?.kind === "waiting_user" ? "J'ai terminé, reprendre" : "Reprendre"}</button>` : ""}
+    ${job.preparation_resumable ? `<button class="link" type="button" data-aa-retry-job="${job.id}">Relancer la préparation</button>` : ""}
+    ${job.resumable && attempt ? `<button class="link" type="button" data-aa-retry="${attempt.id}">${attempt.intervention?.kind === "waiting_user" ? "J'ai terminé, reprendre" : "Reprendre"}</button>` : ""}
     ${job.proofs?.["avant-envoi.png"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["avant-envoi.png"])}">Voir la capture</a>` : ""}
     ${job.proofs?.["confirmation.png"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["confirmation.png"])}">Confirmation</a>` : ""}
     ${job.proofs?.["journal.md"] ? `<a class="link" target="_blank" rel="noopener" href="${esc(job.proofs["journal.md"])}">Journal</a>` : ""}</li>`;
@@ -600,6 +609,7 @@ function renderAutoApplyList() {
     await openTracker();
     openAppModal(Number(button.dataset.aaApp));
   }));
+  $$("[data-aa-log]", $("#aaRecent")).forEach(button => (button.onclick = () => openAutoApplyLog(Number(button.dataset.aaLog))));
   $$("[data-aa-retry]", $("#aaRecent")).forEach(button => (button.onclick = async () => {
     try {
       await api(`/api/application-attempts/${button.dataset.aaRetry}/retry`, { method: "POST" });
@@ -607,6 +617,34 @@ function renderAutoApplyList() {
     } catch (e) { toast(e.message, 5000); }
     await loadAutoApplyPage();
   }));
+  $$("[data-aa-retry-job]", $("#aaRecent")).forEach(button => (button.onclick = async () => {
+    try {
+      await api(`/api/auto-apply/jobs/${button.dataset.aaRetryJob}/retry`, { method: "POST" });
+      toast("Préparation relancée");
+    } catch (e) { toast(e.message, 5000); }
+    await loadAutoApplyPage();
+  }));
+}
+
+async function openAutoApplyLog(jobId) {
+  openDialog(`<div class="m-pad aa-log-modal"><h2 id="dialogTitle">Journal du robot</h2>
+    <p class="muted" role="status">Chargement des actions…</p></div>`);
+  try {
+    const data = await api(`/api/auto-apply/jobs/${jobId}/activity`);
+    const events = (data.events || []).map(event => `<li class="${esc(event.level || "info")}">
+      <time>${esc(event.at ? new Date(event.at).toLocaleString("fr-FR") : "")}</time>
+      <b>${esc(event.label)}</b><span>${esc(event.detail || "")}</span></li>`).join("");
+    $("#dialogBody").innerHTML = `<div class="m-pad aa-log-modal"><h2 id="dialogTitle">Journal du robot</h2>
+      <ol class="aa-log-events">${events || "<li>Aucune action enregistrée.</li>"}</ol>
+      <h3>Actions détaillées du navigateur</h3>
+      <pre class="aa-log-text">${esc(data.journal || "Le robot n’a pas encore ouvert le formulaire de candidature.")}</pre></div>
+      <div class="m-foot"><button class="btn" type="button" data-dialog-close>Fermer</button></div>`;
+    $("[data-dialog-close]", $("#dialogBody")).onclick = closeDialog;
+  } catch (error) {
+    $("#dialogBody").innerHTML = `<div class="m-pad"><h2 id="dialogTitle">Journal du robot</h2>
+      <p class="e-note warn">${esc(error.message)}</p></div><div class="m-foot"><button class="btn" data-dialog-close>Fermer</button></div>`;
+    $("[data-dialog-close]", $("#dialogBody")).onclick = closeDialog;
+  }
 }
 
 async function loadAutoApplyPage() {
@@ -666,6 +704,7 @@ function applyPrefsToFilters(p) {
   $("#qStatus").value = p.status;
   $("#qSort").value = p.sort;
   $("#qNoNationality").checked = p.noNationality;
+  $("#qHideApplied").checked = p.hideApplied;
 }
 
 function readFilters() {
@@ -677,6 +716,7 @@ function readFilters() {
     source: $("#qSource").value,
     sort: $("#qSort").value,
     noNationality: $("#qNoNationality").checked,
+    hideApplied: $("#qHideApplied").checked,
   };
   savePrefs(state.currentId, p);
   $("#qZoneThrWrap").hidden = p.zone !== "flex";
@@ -704,6 +744,7 @@ function filteredOffers() {
     }
     if (p.source && !o.links.some(l => l.source === p.source)) return false;
     if (p.noNationality && o.nationality_required) return false;
+    if (p.hideApplied && isAlreadyApplied(o)) return false;
     return matchesText(o, q);
   });
   if (p.sort === "priority") list.sort((a, b) => a.priority_order - b.priority_order);
@@ -741,6 +782,13 @@ function alreadyAppliedBadge(o) {
   if (!x) return "";
   const tip = `Candidature « ${x.title} » envoyée le ${fmtDay(x.applied_at)}`;
   return `<span class="badge applied-here" title="${esc(tip)}">Déjà postulé ici</span>`;
+}
+
+// Une offre est réellement « postulée » après envoi, pas lorsqu'elle est seulement consultée
+// ou qu'une candidature a été abandonnée avant envoi. `already_applied` couvre une autre
+// candidature récente auprès de la même entreprise signalée par l'API.
+function isAlreadyApplied(o) {
+  return Boolean(o.already_applied || (o.app_id && o.app_status && !["consultee", "abandon"].includes(o.app_status)));
 }
 
 function companyStar(o) {
@@ -802,7 +850,7 @@ function renderOffers() {
     const city = a.city && a.city !== "Non précisé" ? a.city : o.location;
     const sources = [...new Set(o.links.map(l => l.source))];
     return `
-    <article class="card ${o.status === "ignored" || o.deadline?.state === "expiree" ? "dim" : ""}" data-id="${o.id}" tabindex="0">
+    <article class="card ${o.status === "ignored" || o.deadline?.state === "expiree" || isAlreadyApplied(o) ? "dim" : ""}" data-id="${o.id}" tabindex="0">
       <div class="card-top">
         ${logoAv(o.company, o.logo)}
         <div class="card-title">
@@ -2857,7 +2905,7 @@ $("#aaQuery").addEventListener("input", renderAutoApplyList);
 $("#aaRetryAll").onclick = async event => {
   try { await retryAllAutoApply(event.currentTarget); } catch (e) { toast(e.message, 6000); }
 };
-["#qText", "#qMin", "#qStatus", "#qSource", "#qSort", "#qZoneThr", "#qNoNationality"].forEach(s => ($(s).oninput = renderOffers));
+["#qText", "#qMin", "#qStatus", "#qSource", "#qSort", "#qZoneThr", "#qNoNationality", "#qHideApplied"].forEach(s => ($(s).oninput = renderOffers));
 $("#qZone").addEventListener("change", renderOffers);
 $$('[data-ai-provider]').forEach(select => select.addEventListener("change", changeAIProvider));
 

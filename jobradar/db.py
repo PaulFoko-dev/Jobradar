@@ -1139,6 +1139,15 @@ def set_document_status(document_id: int, status: str) -> dict:
         ats = json.loads(row["ats_json"])
         if status == "pret" and (not ats.get("ready") or float(ats.get("readability", 0)) < 95):
             raise Conflict("Lisibilité ATS inférieure à 95 % : corrige et contrôle de nouveau le document.")
+        # Une candidature ne doit avoir qu'un seul CV et une seule lettre actifs pour l'envoi.
+        # Les documents déjà envoyés restent figés ; seules les anciennes versions « prêtes »
+        # du même type sont rétrogradées en brouillon dans la même transaction.
+        if status == "pret":
+            c.execute(
+                """UPDATE documents SET status='brouillon', updated_at_utc=?
+                   WHERE application_id=? AND kind=? AND status='pret' AND id<>?""",
+                (timestamp, row["application_id"], row["kind"], document_id),
+            )
         c.execute("UPDATE documents SET status=?, updated_at_utc=? WHERE id=?", (status, timestamp, document_id))
         return _document_row(c.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone())
 

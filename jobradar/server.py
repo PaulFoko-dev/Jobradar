@@ -269,6 +269,16 @@ def auto_apply_retry_all():
     return preparation.retry_all()
 
 
+@app.get("/api/auto-apply/jobs/{job_id}/activity")
+def auto_apply_activity(job_id: int):
+    return preparation.activity(job_id)
+
+
+@app.post("/api/auto-apply/jobs/{job_id}/retry")
+def retry_auto_apply_preparation(job_id: int):
+    return preparation.retry_preparation(job_id)
+
+
 @app.get("/api/searches/{sid}/auto-apply")
 def auto_apply_status(sid: int):
     return preparation.status(sid)

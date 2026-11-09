@@ -353,3 +353,33 @@ def test_candidature_envoyee_a_la_main_n_est_jamais_relancee(client, search_id, 
     assert client.post("/api/auto-apply/retry").json() == {"retried": 0}
     assert client.post(f"/api/application-attempts/{attempt['id']}/retry").status_code == 409
     assert db.get_application_attempt(attempt["id"])["status"] == "needs_user"
+
+
+def test_journal_auto_expose_la_preparation_meme_sans_tentative_d_envoi(client, make_offer):
+    application = _application(make_offer)
+    job = db.create_preparation_job(application["id"], origin="auto", params={})
+    db.update_preparation_job(job["id"], status="done", step="manual")
+
+    response = client.get(f"/api/auto-apply/jobs/{job['id']}/activity")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["application_id"] == application["id"]
+    assert [event["label"] for event in body["events"]] == ["Ajoutée à la file", "Envoi manuel requis"]
+    assert body["journal"] == ""
+
+
+def test_preparation_auto_echouee_peut_etre_relancee(client, make_offer, monkeypatch):
+    monkeypatch.setattr(preparation, "wake", lambda: None)
+    application = _application(make_offer)
+    failed = db.create_preparation_job(application["id"], origin="auto", params={"offer_id": 42})
+    db.update_preparation_job(failed["id"], status="failed", step="prepare", error="Quota IA")
+
+    overview = client.get("/api/auto-apply").json()
+    item = next(value for value in overview["recent"] if value["id"] == failed["id"])
+    assert item["preparation_resumable"] and item["resumable"]
+
+    response = client.post(f"/api/auto-apply/jobs/{failed['id']}/retry")
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert db.latest_preparation_job(application["id"])["params"] == {"offer_id": 42}

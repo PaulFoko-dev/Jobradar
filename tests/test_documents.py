@@ -119,6 +119,45 @@ def test_patch_revalidates_before_rerender(client, fake_render):
     assert len(fake_render.calls) == 1  # seul le rendu initial a eu lieu
 
 
+def test_patch_can_change_a_generated_cv_template_without_changing_its_content(client, fake_render):
+    seed_profile()
+    application = create_archived_application(client)
+    document = client.post(f"/api/applications/{application['id']}/documents/render", json={
+        "composition": composition(), "template": {"kind": "jobradar", "id": "sobre-ats"},
+    }).json()["documents"][0]
+
+    response = client.patch(f"/api/documents/{document['id']}", json={
+        "composition": document["composition"],
+        "template": {"kind": "latex", "id": "latex-ats"},
+    })
+
+    assert response.status_code == 200
+    updated = response.json()
+    assert updated["template"] == {"kind": "latex", "id": "latex-ats"}
+    assert updated["composition"]["headline"] == document["composition"]["headline"]
+    assert fake_render.calls[-1]["template"] == {"kind": "latex", "id": "latex-ats"}
+
+
+def test_only_one_ready_document_per_kind_is_kept(data_dir):
+    application = db.create_application({"title": "Stage SOC"})
+    ats = {"readability": 100, "ready": True, "keyword_coverage": {}, "issues": []}
+    template = {"kind": "jobradar", "id": "sobre-ats"}
+    first_cv = db.create_document(application["id"], "cv", 1, {"kind": "cv"}, template, ats, [])
+    first_letter = db.create_document(application["id"], "lettre", 1, {"kind": "lettre"}, template, ats, [])
+    second_cv = db.create_document(application["id"], "cv", 2, {"kind": "cv"}, template, ats, [])
+    second_letter = db.create_document(application["id"], "lettre", 2, {"kind": "lettre"}, template, ats, [])
+
+    db.set_document_status(first_cv["id"], "pret")
+    db.set_document_status(first_letter["id"], "pret")
+    db.set_document_status(second_cv["id"], "pret")
+    db.set_document_status(second_letter["id"], "pret")
+
+    assert db.get_document(first_cv["id"])["status"] == "brouillon"
+    assert db.get_document(second_cv["id"])["status"] == "pret"
+    assert db.get_document(first_letter["id"])["status"] == "brouillon"
+    assert db.get_document(second_letter["id"])["status"] == "pret"
+
+
 def test_source_route_checks_signature_and_maps_ai_error_to_502(client, monkeypatch):
     invalid = client.post("/api/profile/sources", json={
         "kind": "cv", "name": "Faux", "tags": [], "filename": "cv.pdf",

@@ -11,3 +11,8 @@ def test_auto_apply_page_has_live_text_search() -> None:
     assert '$("#aaQuery").addEventListener("input", renderAutoApplyList)' in script
     assert "matchesAutoApplyQuery(job, query)" in script
     assert "autoApplyResult(job)" in script
+    assert '$("#aaFilter").addEventListener("change", renderAutoApplyList)' in script
+    assert 'job.step === "manual"' in script
+    assert 'data-aa-log="${esc(job.id)}"' in script
+    assert "openAutoApplyLog" in script
+    assert "data-aa-retry-job" in script

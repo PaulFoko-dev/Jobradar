@@ -7,7 +7,7 @@
   if (!ui) return;
 
   const { api, esc, toast } = ui;
-  const state = { application: null, preparation: null, templates: [], busy: false };
+  const state = { application: null, preparation: null, templates: [], documents: [], busy: false };
   const q = (selector, root = document) => root.querySelector(selector);
   const qa = (selector, root = document) => [...root.querySelectorAll(selector)];
   const root = () => q("#applicationDocuments");
@@ -45,6 +45,14 @@
     return filtered.map(item => `<option value="${esc(item.id)}">${esc(item.name || item.filename || item.id)}${item.language ? ` · ${esc(item.language.toUpperCase())}` : ""}</option>`).join("");
   }
 
+  function templateOptions(selected) {
+    return state.templates.map(template => {
+      const value = `${template.kind}:${template.id}`;
+      const active = selected?.kind === template.kind && selected?.id === template.id;
+      return `<option value="${esc(value)}" ${active ? "selected" : ""}>${esc(template.name)}</option>`;
+    }).join("");
+  }
+
   function setupHtml(profile) {
     const sources = profile?.sources || [];
     return `<section class="doc-workflow" aria-labelledby="doc-title">
@@ -57,7 +65,7 @@
         <div class="doc-grid"><label>CV de base<select name="base_cv"><option value="">Choix automatique</option>${sourceOptions(sources, "cv")}</select></label>
           <label>Lettre de base<select name="base_letter"><option value="">Choix automatique</option>${sourceOptions(sources, "lettre")}</select></label></div>
         <div class="doc-grid"><label>Langue<select name="language"><option value="">Langue du document de base</option><option value="fr">Français</option><option value="en">Anglais</option></select></label>
-          <label>Modèle<select name="template"><option value="">Modèle original si compatible, sinon Sobre ATS</option>${state.templates.map(template => `<option value="${esc(template.kind)}:${esc(template.id)}">${esc(template.name)}</option>`).join("")}</select></label></div>
+          <label>Modèle<select name="template"><option value="">Modèle original si compatible, sinon Sobre ATS</option>${templateOptions()}</select></label></div>
         <button class="btn primary" type="submit">Analyser et préparer</button>
       </form></section>`;
   }
@@ -166,7 +174,7 @@
         <textarea id="docRefinePrompt" name="instruction" maxlength="2000" required placeholder="Ex. Raccourcis l'accroche, mets davantage en avant mon projet réseau et rends la lettre plus directe."></textarea>
         <p class="doc-help">La demande ne peut ajouter aucun fait absent de ton profil. Un nouvel aperçu sera proposé avant création des fichiers.</p>
         <button class="btn" type="submit">Mettre à jour les aperçus</button></form>
-        <div class="doc-actions"><label>Modèle final<select id="docFinalTemplate">${state.templates.map(template => `<option value="${esc(template.kind)}:${esc(template.id)}" ${result.composition?.template?.id === template.id ? "selected" : ""}>${esc(template.name)}</option>`).join("")}</select></label><button class="btn primary" id="docRender" type="button">Créer et télécharger le PDF et le DOCX</button></div>`}
+        <div class="doc-actions"><label>Modèle final<select id="docFinalTemplate">${templateOptions(result.composition?.template)}</select></label><button class="btn primary" id="docRender" type="button">Créer et télécharger le PDF et le DOCX</button></div>`}
     </section>`;
   }
 
@@ -247,6 +255,12 @@
       ${document.current?.ok === false ? `<div class="ats-summary blocked" data-stale-document><b>Document périmé</b></div><p class="doc-help">${esc(document.current.message)}</p>` : atsHtml(document.ats)}
       ${pdf ? `<iframe class="doc-pdf" title="Aperçu ${document.kind === "lettre" ? "de la lettre" : "du CV"} version ${esc(document.version)}" src="${esc(safeFileUrl(document.id, pdf.name))}"></iframe>` : ""}
       <div class="doc-files">${files.map(file => `<a class="btn sm" href="${esc(safeFileUrl(document.id, file.name))}" download>${esc(file.name)} ↓</a>`).join("")}</div>
+      ${["cv", "lettre"].includes(document.kind) ? `<form class="doc-template-change" data-template-document="${esc(document.id)}">
+        <label for="doc-template-${esc(document.id)}">Changer le modèle de ${document.kind === "cv" ? "ce CV" : "cette lettre"}</label>
+        <select id="doc-template-${esc(document.id)}" name="template" required>${templateOptions(document.template)}</select>
+        <button class="btn sm" type="submit">Appliquer le modèle</button>
+        <p class="doc-help">Le contenu adapté est conservé et les contrôles sont relancés.${document.status === "envoye" ? " Une nouvelle version sera créée car celle-ci a déjà été envoyée." : ""}</p>
+      </form>` : ""}
       <form class="doc-improve" data-improve-document="${esc(document.id)}">
         <label for="doc-improve-${esc(document.id)}">Que veux-tu améliorer dans ce ${document.kind === "lettre" ? "courrier" : "CV"} ?</label>
         <textarea id="doc-improve-${esc(document.id)}" name="instruction" maxlength="2000" required
@@ -256,6 +270,21 @@
       </form>
       <div class="doc-actions">${document.status === "brouillon" ? `<button class="btn primary sm" data-ready="${esc(document.id)}" ${document.ats?.ready !== true || document.current?.ok === false ? "disabled title=\"Le contrôle ATS doit être intégralement réussi avec ton profil actuel\"" : ""}>Marquer prêt à envoyer</button>` : ""}
         ${document.status === "pret" ? `<button class="btn primary sm" data-sent="${esc(document.id)}">Marquer comme envoyé</button>` : ""}</div></article>`;
+  }
+
+  function documentsListHtml(documents) {
+    const primary = [], others = [];
+    for (const kind of ["cv", "lettre"]) {
+      const versions = documents.filter(document => document.kind === kind);
+      if (!versions.length) continue;
+      const visible = versions.find(document => document.status === "pret") || versions[0];
+      primary.push(visible);
+      others.push(...versions.filter(document => document.id !== visible.id));
+    }
+    const cards = primary.map(documentHtml).join("");
+    const history = others.length ? `<details class="doc-versions"><summary>Autres versions (${others.length})</summary>
+      <div class="documents-list">${others.map(documentHtml).join("")}</div></details>` : "";
+    return cards + history;
   }
 
   async function renderDocumentsTab(application, archiveFiles = [], force = false) {
@@ -273,6 +302,7 @@
         api(`/api/applications/${application.id}/documents/preparation`),
       ]);
       state.templates = templates || [];
+      state.documents = documents || [];
       host._profile = profile;
       const job = preparation?.job;
       if (job && (["queued", "running"].includes(job.status) || !job.consumed_at_utc)) {
@@ -281,7 +311,7 @@
       }
       host.innerHTML = `<div data-doc-error aria-live="assertive"></div><div class="doc-toolbar"><div><h3>Documents</h3><p>${documents.length ? "Versions préparées pour cette candidature." : "Aucun CV ou lettre préparé."}</p></div>
         <button class="btn primary" data-start-documents>Préparer ma candidature</button></div>
-        <div class="documents-list">${documents.length ? documents.map(documentHtml).join("") : `<div class="doc-empty">Le parcours conserve le modèle de ton CV par défaut et contrôle chaque fichier avant envoi.</div>`}</div>
+        <div class="documents-list">${documents.length ? documentsListHtml(documents) : `<div class="doc-empty">Le parcours conserve le modèle de ton CV par défaut et contrôle chaque fichier avant envoi.</div>`}</div>
         ${archiveFiles.length ? `<details><summary>Autres fichiers archivés (${archiveFiles.length})</summary><ul>${archiveFiles.map(file => `<li>${esc(file.name || file.path)}</li>`).join("")}</ul></details>` : ""}`;
       host._profile = profile;
       host.dataset.loaded = "true";
@@ -391,6 +421,38 @@
     if (!host) return;
     q("[data-start-documents]", host)?.addEventListener("click", () => prepare(application).catch(error => {
       host.innerHTML = errorBox(error.message || String(error));
+    }));
+    qa("[data-template-document]", host).forEach(form => form.addEventListener("submit", event => {
+      event.preventDefault();
+      const documentId = Number(form.dataset.templateDocument);
+      const document = state.documents.find(item => Number(item.id) === documentId);
+      const [kind, id] = form.elements.template.value.split(":", 2);
+      if (!document || !id || (document.template?.kind === kind && document.template?.id === id)) {
+        if (document) toast("Ce modèle est déjà utilisé par ce CV.");
+        return;
+      }
+      const createsVersion = document.status === "envoye";
+      const question = createsVersion
+        ? "Ce CV a déjà été envoyé. Créer une nouvelle version avec le modèle choisi ?"
+        : "Appliquer ce modèle au CV ? Le contenu sera conservé et les fichiers actuels seront régénérés.";
+      if (!window.confirm(question)) return;
+      const button = q('button[type="submit"]', form);
+      run(button, "Application…", async () => {
+        const template = { kind, id };
+        if (createsVersion) {
+          await api(`/api/applications/${application.id}/documents/render`, { method: "POST", body: {
+            composition: document.kind === "cv" ? document.composition : null,
+            letter: document.kind === "lettre" ? document.composition : null,
+            template,
+          }});
+        } else {
+          await api(`/api/documents/${document.id}`, { method: "PATCH", body: {
+            composition: document.composition, template,
+          }});
+        }
+        toast(createsVersion ? "Nouvelle version créée avec le modèle choisi" : "Modèle appliqué et CV contrôlé");
+        await renderDocumentsTab(application, [], true);
+      }).catch(() => {});
     }));
     qa("[data-improve-document]", host).forEach(form => form.addEventListener("submit", event => {
       event.preventDefault();

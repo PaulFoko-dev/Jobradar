@@ -56,15 +56,23 @@
 .doc-issues { margin: 8px 0; }
 .doc-pdf { width: 100%; min-height: 520px; border: 1px solid var(--border); border-radius: 8px; background: white; }
 .doc-files, .doc-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
-.doc-improve { display: grid; gap: 8px; margin-top: 14px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.doc-improve, .doc-template-change { display: grid; gap: 8px; margin-top: 14px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
 .doc-improve label { font-weight: 700; }
 .doc-improve textarea { min-height: 88px; resize: vertical; line-height: 1.45; }
 .doc-improve .btn { justify-self: start; }
+.doc-template-change { grid-template-columns: minmax(180px, 1fr) auto; align-items: end; }
+.doc-template-change label { grid-column: 1 / -1; font-weight: 700; }
+.doc-template-change .doc-help { grid-column: 1 / -1; margin: 0; }
 .doc-empty { color: var(--muted); text-align: center; }
+.doc-versions { margin-top: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.doc-versions > summary { cursor: pointer; color: var(--muted); font-weight: 700; }
+.doc-versions > .documents-list { margin-top: 12px; }
 .archive-files { margin-top: 18px; }
 @media (max-width: 760px) {
   .doc-grid, .doc-review-grid { grid-template-columns: 1fr; }
   .doc-heading, .doc-toolbar, .document-card > header, .doc-actions { align-items: stretch; flex-direction: column; }
+  .doc-template-change { grid-template-columns: 1fr; }
+  .doc-template-change label, .doc-template-change .doc-help { grid-column: 1; }
   .doc-pdf { min-height: 380px; }
   .doc-answer-choices { grid-template-columns: 1fr; }
   .doc-questions .doc-question-step { min-height: 0; padding: 16px; }

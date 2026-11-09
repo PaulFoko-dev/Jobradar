@@ -857,3 +857,17 @@ table.apps .k-flags { margin-top: 4px; }
 .auto-apply-recent .aa-error { color: var(--muted); flex-basis: 100%; }
 .auto-apply-recent .aa-result { color: var(--muted); flex-basis: 100%; padding-left: 10px; }
 .auto-apply-recent .aa-ai { color: var(--muted); flex-basis: 100%; padding-left: 10px; font-style: italic; font-size: .92em; }
+/* La fenêtre s'élargit pour le journal ; tout le contenu reste dans sa largeur (aucun défilement horizontal). */
+.dialog .modal-card:has(.aa-log-modal) { width: min(880px, 100%); overflow-x: hidden; }
+.aa-log-modal { min-width: 0; }
+.aa-log-events { list-style: none; padding: 0; display: grid; gap: 8px; }
+.aa-log-events li { display: grid; grid-template-columns: 130px minmax(0, 190px) minmax(0, 1fr); gap: 4px 12px;
+  align-items: baseline; padding: 9px 11px; border-left: 3px solid var(--accent); background: var(--surface-2);
+  border-radius: 6px; min-width: 0; }
+.aa-log-events li > * { min-width: 0; overflow-wrap: anywhere; }
+.aa-log-events li.warning { border-left-color: var(--mid); }
+.aa-log-events li.error { border-left-color: var(--low); }
+.aa-log-events time { color: var(--muted); font-size: 12px; }
+.aa-log-text { max-height: 45vh; overflow: auto; padding: 12px; border-radius: 8px; background: var(--surface-2);
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+@media (max-width: 700px) { .aa-log-events li { grid-template-columns: 1fr; } }
