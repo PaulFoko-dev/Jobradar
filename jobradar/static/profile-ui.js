@@ -21,6 +21,10 @@
     ["work_authorization", "Autorisation de travail dans le pays du poste", "oui_non"],
     ["sponsorship", "Besoin d’un visa ou d’un parrainage employeur", "oui_non"],
     ["desired_salary", "Rémunération souhaitée", "ex. 1 400 € brut/mois"],
+    ["relocation", "Mobilité géographique (prêt à déménager)", "oui_non"],
+    ["driving_licence", "Permis de conduire B", "oui_non"],
+    ["internship_agreement", "Convention de stage possible avec ton école", "oui_non"],
+    ["internship_duration", "Durée de stage souhaitée", "ex. 6 mois"],
   ];
   let current = null;
   let versions = [];

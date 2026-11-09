@@ -110,3 +110,35 @@ def test_tailoring_profile_view_is_blind() -> None:
 def test_profile_for_ai_drops_identity_and_answers() -> None:
     view = profile.for_ai(CANDIDATE)
     assert "identity" not in view and "standard_answers" not in view
+
+
+@pytest.mark.parametrize(("label", "kind", "options", "expected"), [
+    ("When can you start?", "text", [], "DISPO-SENTINELLE"),
+    ("Are you legally authorized to work in France?", "select", ["Yes", "No"], "Yes"),
+    ("Will you now or in the future require visa sponsorship?", "radio", ["Yes", "No"], "No"),
+    ("Votre convention de stage est-elle possible ?", "select", ["Oui", "Non"], "Oui"),
+    ("Quelle est votre couleur préférée ?", "text", [], None),
+])
+def test_stored_answers_are_found_whatever_the_wording(label, kind, options, expected) -> None:
+    candidate = CANDIDATE | {"standard_answers": {
+        "availability": {"question": "Date de disponibilité", "answer": "DISPO-SENTINELLE"},
+        "work_authorization": {"question": "Autorisation de travail", "answer": "Oui"},
+        "sponsorship": {"question": "Besoin d'un visa", "answer": "Non"},
+        "internship_agreement": {"question": "Convention de stage possible", "answer": "Oui"}}}
+    field = {"label": label, "input_kind": kind, "options": options}
+    assert application_adapters.standard_answer_for(field, candidate) == expected
+
+
+def test_stored_answers_survive_an_unavailable_ai(monkeypatch) -> None:
+    def down(*_args):
+        raise ai.QuotaError("quota épuisé")
+
+    monkeypatch.setattr(ai, "ask_ai", down)
+    plan = {"values": [], "ready": False, "interventions": [
+        {"selector": "#dispo", "label": "Start date", "classification": "factual", "input_kind": "text"},
+        {"selector": "#autre", "label": "Projet préféré", "classification": "factual", "input_kind": "text"}]}
+    candidate = CANDIDATE | {"standard_answers": {"availability": {"question": "Date de disponibilité",
+                                                                    "answer": "Janvier 2027"}}}
+    result = application_adapters.ai_plan(plan, candidate, OFFER)
+    assert [item["selector"] for item in result["values"]] == ["#dispo"]
+    assert [item["selector"] for item in result["interventions"]] == ["#autre"]
