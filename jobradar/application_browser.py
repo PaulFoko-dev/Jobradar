@@ -1201,6 +1201,7 @@ def process(attempt: dict) -> None:
             try:
                 outcome = _run_session(context, attempt, provider, candidate, files, approved)
             finally:
+                _record_stop(attempt, candidate, [page for page in context.pages if page not in existing_pages])
                 for opened in set(context.pages) - existing_pages:
                     try:
                         # Un arrêt manuel reste exactement là où il a eu lieu. Une confirmation
@@ -1226,6 +1227,30 @@ def process(attempt: dict) -> None:
         browser_lock.release()
     if outcome == "submitted":
         application_flow.finalize_assisted_submission(attempt["id"])
+
+
+def private_values(candidate: dict, values: dict[str, str] | None = None) -> list[str]:
+    """Valeurs du candidat à masquer dans tout DOM enregistré : profil, faits dérivés et réponses types."""
+    found = list((values or application_supervisor.profile_values(candidate)).values())
+    standard = candidate.get("standard_answers") if isinstance(candidate.get("standard_answers"), dict) else {}
+    found += [str(item.get("answer") or "") for item in standard.values() if isinstance(item, dict)]
+    identity = candidate.get("identity") if isinstance(candidate.get("identity"), dict) else {}
+    found += [str(value) for value in identity.values() if isinstance(value, str)]
+    return [value for value in dict.fromkeys(found) if value]
+
+
+def _record_stop(attempt: dict, candidate: dict, pages: list) -> None:
+    """Arrêt en attente d'intervention : la page où le robot a calé rejoint le corpus de rejeu."""
+    try:
+        current = db.get_application_attempt(attempt["id"])
+        if current.get("status") != "needs_user" or not pages:
+            return
+        kind = (current.get("intervention") or {}).get("kind") or "inconnu"
+        application_supervisor.save_dom(pages[-1], _proof_directory(attempt), f"arret-{attempt['id']}",
+                                        private_values(candidate), stop_kind=kind, attempt_id=attempt["id"],
+                                        provider=attempt["provider"])
+    except Exception:  # noqa: BLE001 - jamais une cause d'échec de la candidature
+        LOGGER.debug("DOM d'arrêt non enregistré", exc_info=True)
 
 
 def _close_quietly(context) -> None:
@@ -1323,6 +1348,7 @@ class _Supervision:
         # y compris pour les règles automatiques qui lisent ``candidate``.
         application_supervisor.enrich_candidate(candidate, facts)
         self.values = application_supervisor.derived_values(facts | application_supervisor.profile_values(candidate))
+        self.journal.private_values = private_values(candidate, self.values)
 
     def _document_facts(self, files: dict) -> dict[str, str]:
         if not self.available or not files:

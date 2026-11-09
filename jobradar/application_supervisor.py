@@ -564,11 +564,50 @@ def review(fields: list[dict], offer: dict) -> list[str]:
     return [] if result.get("ok") and not issues else issues or ["Incohérence signalée sans détail."]
 
 
+DOM_INDEX = "dom-index.json"
+MAX_DOM_BYTES = 3_000_000
+
+
+def save_dom(page, directory: Path, label: str, private_values: list[str], **meta) -> Path | None:
+    """Enregistre le DOM assaini de la page et de ses cadres, pour le corpus de rejeu du robot.
+
+    Aucune valeur saisie, champ caché, script, jeton ni donnée connue du candidat n'est conservé
+    (``redaction.sanitize_html``). Un échec n'interrompt jamais la candidature.
+    """
+    from . import redaction  # import local : module léger, évite d'alourdir le chargement des tests
+
+    try:
+        html = redaction.sanitize_html(page.content(), private_values)
+        for frame in getattr(page, "frames", [])[1:]:
+            try:
+                inner = redaction.sanitize_html(frame.content(), private_values)
+            except Exception:  # cadre détaché ou d'une autre origine : la page principale suffit
+                continue
+            html += f'\n<section data-jobradar-frame="{redaction.strip_url(frame.url)}">\n{inner}\n</section>'
+        if len(html.encode()) > MAX_DOM_BYTES:
+            return None
+        path = directory / f"dom-{label}.html"
+        profile.atomic_write(path, html.encode())
+        index_path = directory / DOM_INDEX
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            index = []
+        index.append({"file": path.name, "url": redaction.strip_url(page.url),
+                      "title": redaction.redact_text(page.title(), private_values),
+                      "at": time.strftime("%Y-%m-%dT%H:%M:%S")} | meta)
+        profile.atomic_write(index_path, json.dumps(index, ensure_ascii=False, indent=1).encode())
+        return path
+    except Exception:  # noqa: BLE001 - l'enregistrement est un bonus, jamais une cause d'arrêt
+        return None
+
+
 class Journal:
     """Journal lisible de la tentative (``envoi/journal.md``) et dernière compréhension pour la page."""
 
     def __init__(self, directory: Path, attempt_id: int) -> None:
         self.directory, self.attempt_id, self.step = directory, attempt_id, 0
+        self.private_values: list[str] = []  # masquées dans les DOM enregistrés (corpus de rejeu)
         self.path = directory / "journal.md"
         if not self.path.exists():
             profile.atomic_write(self.path, b"# Journal d'envoi\n")
@@ -607,6 +646,8 @@ class Journal:
             page.screenshot(path=str(self.directory / f"etape-{self.step}.png"))
         except Exception:  # une capture manquée ne doit jamais interrompre l'envoi
             pass
+        save_dom(page, self.directory, f"etape-{self.step}", self.private_values,
+                 page_kind=decision["page_kind"], attempt_id=self.attempt_id)
         profile.atomic_write(self.directory / "supervision.json", json.dumps(
             {"attempt_id": self.attempt_id, "step": self.step, "page_kind": decision["page_kind"],
              "understanding": decision["understanding"], "at": time.strftime("%Y-%m-%dT%H:%M:%S")},
