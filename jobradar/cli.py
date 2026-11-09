@@ -5,6 +5,7 @@
     python -m jobradar.cli refresh --id 3   # exécute une recherche précise
     python -m jobradar.cli backup           # sauvegarde ZIP dans data/sauvegardes/
     python -m jobradar.cli navigateur       # ouvre le navigateur dédié aux connexions
+    python -m jobradar.cli restaurer F.zip  # restaure une sauvegarde dans un dossier de données vide
 
 ``refresh`` entretient aussi les archives des candidatures : rattrapage des dossiers manquants,
 captures en attente et vérification (au plus quotidienne) des annonces retirées.
@@ -40,8 +41,17 @@ def main():
     r.add_argument("--id", type=int)
     sub.add_parser("backup", help="sauvegarde ZIP : base, configuration et archives des candidatures")
     sub.add_parser("navigateur", help="ouvre le navigateur dédié aux candidatures")
+    restore = sub.add_parser("restaurer", help="restaure une sauvegarde ZIP dans un dossier de données vide")
+    restore.add_argument("zip", help="fichier JobRadar-sauvegarde-….zip")
     args = p.parse_args()
 
+    if args.cmd == "restaurer":
+        from pathlib import Path
+
+        result = export.restore_backup(Path(args.zip), data_dir=config.DATA_DIR, archive_dir=config.archive_dir())
+        print(f"{result['files']} fichier(s) restauré(s) dans {config.DATA_DIR}."
+              + (" Données chiffrées : lance JobRadar et saisis ta clé de récupération." if result["encrypted"] else ""))
+        return
     db.init()
     if args.cmd == "serve":
         import threading

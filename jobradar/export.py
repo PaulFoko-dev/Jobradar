@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import re
+import shutil
 import sqlite3
 import tempfile
 import zipfile
@@ -188,6 +190,86 @@ def _archive_files(
                 continue
 
 
+MANIFEST = "sauvegarde.json"
+VAULT_FILE = "vault.json"
+
+
+def _manifest(data_dir: Path, instant: datetime) -> dict:
+    encrypted = (data_dir / VAULT_FILE).is_file()
+    return {"format": "jobradar-backup", "version": 2, "created_at": _utc_text(instant), "encrypted": encrypted,
+            "restauration": ("Données privées chiffrées : après « python -m jobradar.cli restaurer », saisis ta clé "
+                             "de récupération dans JobRadar.") if encrypted else "Données en clair."}
+
+
+def _profile_files(zipped: zipfile.ZipFile, data_dir: Path) -> None:
+    """Profil (chiffré au repos si le coffre existe) et enveloppes du coffre (aucune clé en clair)."""
+    if (data_dir / VAULT_FILE).is_file():
+        zipped.write(data_dir / VAULT_FILE, VAULT_FILE)
+    root = data_dir / "profil"
+    if not root.is_dir() or root.is_symlink():
+        return
+    for current, directories, files in os.walk(root, followlinks=False):
+        directories[:] = sorted(name for name in directories if not (Path(current) / name).is_symlink())
+        for name in sorted(files):
+            path = Path(current) / name
+            if path.is_symlink() or _TEMPORARY.fullmatch(name) or name.endswith(".tmp"):
+                continue
+            try:
+                zipped.write(path, (Path("profil") / path.relative_to(root)).as_posix())
+            except FileNotFoundError:
+                continue
+
+
+def restore_backup(zip_path: Path, *, data_dir: Path, archive_dir: Path) -> dict:
+    """Restaure une sauvegarde dans un dossier de données neuf (jamais par-dessus une base existante)."""
+    data_dir, archive_dir = Path(data_dir), Path(archive_dir)
+    if (data_dir / "jobradar.db").exists():
+        raise FileExistsError(f"Une base existe déjà dans {data_dir} : restaure dans un dossier vide.")
+    restored = 0
+    with zipfile.ZipFile(zip_path) as zipped:
+        for info in zipped.infolist():
+            name = Path(info.filename)
+            if name.is_absolute() or ".." in name.parts or info.is_dir():
+                continue  # aucune écriture hors des dossiers prévus
+            if name.parts[0] == "candidatures":
+                target = archive_dir.joinpath(*name.parts[1:])
+            elif name.parts[0] == "profil" or name.as_posix() in {"jobradar.db", "config.json", VAULT_FILE}:
+                target = data_dir / name
+            else:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zipped.open(info) as source, open(target, "wb") as output:
+                shutil.copyfileobj(source, output)
+            restored += 1
+    return {"files": restored, "encrypted": (data_dir / VAULT_FILE).is_file()}
+
+
+def plaintext_backups(*, data_dir: Path) -> list[dict]:
+    """Sauvegardes antérieures au coffre : elles contiennent tes données en clair."""
+    vault_file = Path(data_dir) / VAULT_FILE
+    directory = _backup_dir(Path(data_dir).resolve())
+    if not vault_file.is_file() or not directory.is_dir():
+        return []
+    created = vault_file.stat().st_mtime
+    try:
+        created = datetime.strptime(json.loads(vault_file.read_text())["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc).timestamp()
+    except (OSError, ValueError, KeyError):
+        pass
+    return [{"name": path.name, "size_bytes": path.stat().st_size}
+            for path in sorted(directory.iterdir())
+            if path.is_file() and not path.is_symlink() and not path.name.startswith(".")
+            and path.stat().st_mtime < created]
+
+
+def delete_plaintext_backups(*, data_dir: Path) -> int:
+    directory = _backup_dir(Path(data_dir).resolve())
+    names = [item["name"] for item in plaintext_backups(data_dir=data_dir)]
+    for name in names:
+        (directory / name).unlink(missing_ok=True)
+    return len(names)
+
+
 def create_backup(
     *,
     data_dir: Path,
@@ -223,7 +305,9 @@ def create_backup(
             with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
                 zipped.write(database_snapshot, "jobradar.db")
                 zipped.write(config_path, "config.json")
+                _profile_files(zipped, data_dir)
                 _archive_files(zipped, archive_dir, data_dir, database_path, config_path)
+                zipped.writestr(MANIFEST, json.dumps(_manifest(data_dir, instant), ensure_ascii=False, indent=2))
         os.replace(temporary, destination)
         completed = True
     finally:

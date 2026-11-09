@@ -187,6 +187,16 @@ def vault_migrate():
     return {"values": values, "files": files} | vault.status()
 
 
+@app.get("/api/vault/plaintext-backups")
+def vault_plaintext_backups():
+    return export.plaintext_backups(data_dir=config.DATA_DIR)
+
+
+@app.delete("/api/vault/plaintext-backups")
+def vault_delete_plaintext_backups():
+    return {"deleted": export.delete_plaintext_backups(data_dir=config.DATA_DIR)}
+
+
 @app.post("/api/vault/lock")
 def vault_lock():
     vault.lock()

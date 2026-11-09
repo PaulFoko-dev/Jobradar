@@ -2674,6 +2674,8 @@ function archivesSettingsHtml() {
           à l'IA (jamais l'identité ni les coordonnées)</label>
         <div class="arch-row"><button class="btn" id="vOpen" hidden>Activer le coffre</button>
           <button class="btn" id="vMigrate" hidden>Chiffrer les données restantes</button></div>
+        <div id="vPlain" hidden><p class="e-note warn small"><b>Sauvegardes antérieures au coffre, en clair :</b> <span id="vPlainList"></span></p>
+          <div class="arch-row"><button class="btn danger" id="vPlainDelete">Supprimer ces sauvegardes en clair</button></div></div>
       </fieldset>
 
       <fieldset class="e-group">
@@ -2766,6 +2768,19 @@ function bindArchivesSettings() {
   $("#vConsent").onchange = async event => {
     try { await api("/api/vault/consent", { method: "PUT", body: { consent: event.target.checked } }); toast("Consentement enregistré"); }
     catch (error) { toast(error.message, 5000); event.target.checked = !event.target.checked; }
+  };
+  api("/api/vault/plaintext-backups").then(files => {
+    if (!files.length) return;
+    $("#vPlain").hidden = false;
+    $("#vPlainList").textContent = files.map(file => file.name).join(", ");
+  }).catch(() => {});
+  $("#vPlainDelete").onclick = async () => {
+    if (!confirm("Supprimer définitivement les sauvegardes antérieures au coffre ? Elles contiennent tes données en clair.")) return;
+    try {
+      const done = await api("/api/vault/plaintext-backups", { method: "DELETE" });
+      toast(`${done.deleted} sauvegarde(s) en clair supprimée(s)`);
+      $("#vPlain").hidden = true;
+    } catch (error) { toast(error.message, 5000); }
   };
   $("#vOpen").onclick = () => window.JobRadarVault?.open();
   $("#vMigrate").onclick = () => window.JobRadarVault?.migrate();
