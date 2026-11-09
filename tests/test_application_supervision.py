@@ -201,20 +201,44 @@ def test_documents_complete_the_profile_without_overriding_it() -> None:
     assert application_supervisor.profile_values(candidate)["website"] == "https://paul-foko.fr"
 
 
-def test_long_country_lists_show_the_options_matching_the_profile(monkeypatch) -> None:
+def test_long_country_lists_are_resolved_locally_without_revealing_the_profile(monkeypatch) -> None:
     countries = [f"Pays {index:03d}" for index in range(240)] + ["France", "France (+33)"]
     snap = _snap({"tag": "select", "label": "Country", "options": countries})
     values = application_supervisor.derived_values({"phone": "+33 7 63 95 67 80", "city": "Paris"})
     prompts = []
     monkeypatch.setattr(ai, "ask_ai", lambda prompt, *_a: prompts.append(prompt) or _decision(
-        {"type": "select", "id": 1, "option": "France"}, page_kind="application_form"))
+        {"type": "select", "id": 1, "source": "country"}, page_kind="application_form"))
 
     decision = application_supervisor.decide(snap, offer={}, values=values)
 
-    sent = json.loads(prompts[0].split("DONNÉES :\n")[1])["instantane"]["elements"][0]
-    assert sent["options_total"] == 242 and {"France", "France (+33)"} <= set(sent["options"])
-    assert len(sent["options"]) < 40
+    payload = prompts[0].split("DONNÉES :\n")[1]
+    sent = json.loads(payload)["instantane"]["elements"][0]
+    # Aucune option choisie d'après le profil : la liste est simplement bornée.
+    assert sent["options_total"] == 242 and len(sent["options"]) == 25 and "France" not in sent["options"]
+    assert "France" not in payload and "+33" not in payload and "63 95" not in payload
     assert decision["actions"][0]["option"] == "France" and not decision["rejected"]
+
+
+@pytest.mark.parametrize(("value", "key", "options", "expected"), [
+    ("France", "country", ["Allemagne", "France (+33)", "Francophonie"], "France (+33)"),
+    ("France", "country", ["Germany", "French Guiana", "FR"], "FR"),
+    ("+33", "phone_country_code", ["Finland (+358)", "France (+33)", "Fiji (+679)"], "France (+33)"),
+    ("+33", "phone_country_code", ["+3", "+330"], None),
+    ("Paris", "city", ["Paris", "Paris 15e"], "Paris"),
+    ("Meaux", "city", ["Lyon", "Marseille"], None),
+])
+def test_profile_values_are_matched_to_options_locally(value, key, options, expected) -> None:
+    assert application_supervisor.match_option(value, options, key) == expected
+
+
+def test_select_with_an_unmatched_profile_value_is_rejected_without_its_value() -> None:
+    snap = _snap({"tag": "select", "label": "Pays", "options": ["Allemagne", "Italie"]})
+    raw = _decision({"type": "select", "id": 1, "source": "country"})
+
+    decision = application_supervisor.validate(raw, snap, {"country": "France"})
+
+    assert not decision["actions"]
+    assert decision["rejected"][0]["reason"] == "aucune option ne correspond au profil"
 
 
 def test_letter_can_only_fill_a_text_area() -> None:

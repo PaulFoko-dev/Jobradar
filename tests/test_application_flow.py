@@ -55,6 +55,20 @@ def test_options_only_offer_ready_ats_documents_and_safe_defaults(client) -> Non
     assert body["attempts"] == []
 
 
+def test_options_defensively_expose_only_latest_ready_version_per_kind(client) -> None:
+    application = _application(client)
+    older = _ready_document(application["id"], "cv", 1)
+    latest = _ready_document(application["id"], "cv", 2)
+    # Simule une ancienne base créée avant la règle d'unicité.
+    with db.connect() as connection:
+        connection.execute("UPDATE documents SET status='pret' WHERE id=?", (older["id"],))
+
+    body = client.get(f"/api/applications/{application['id']}/apply/options").json()
+
+    assert [item["id"] for item in body["documents"] if item["kind"] == "cv"] == [latest["id"]]
+    assert body["defaults"]["cv_document_id"] == latest["id"]
+
+
 def test_review_policy_is_frozen_on_attempt_and_can_be_remembered(client) -> None:
     application = _application(client)
     cv = _ready_document(application["id"])
@@ -90,6 +104,12 @@ def test_linkedin_and_indeed_are_manual_only(client) -> None:
             "mode": "assisted", "cv_document_id": document["id"],
         })
         assert response.status_code == 409 and "uniquement en mode manuel" in response.json()["detail"]
+
+
+def test_welcome_to_the_jungle_utilise_l_envoi_assiste_dedie() -> None:
+    assert application_flow.provider_for(
+        "https://www.welcometothejungle.com/fr/companies/acme/jobs/stage-soc_paris"
+    ) == "welcometothejungle"
 
 
 def test_manual_start_rejects_foreign_or_unready_documents(client) -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 
@@ -20,11 +21,13 @@ from . import ai, config, profile
 from .application_adapters import (
     CONSENT_WORDS,
     NEWSLETTER_WORDS,
+    NOT_CURRENT_WORDS,
     SENSITIVE_TERMS,
     _first_name,
     _fold,
     _last_name,
     compact_phone,
+    current_position,
 )
 
 MODES = ("always", "fallback", "off")
@@ -94,7 +97,8 @@ ACTION_SCHEMA = {
         "id": {"type": "integer", "description": "Numéro de l'élément dans l'instantané (0 pour stop)"},
         "purpose": {"type": "string", "enum": PURPOSES, "description": "Pour click uniquement, sinon vide"},
         "source": {"type": "string", "description": "fill : clé de profil, motivation ou question ; upload : cv ou lettre"},
-        "option": {"type": "string", "description": "select : libellé exact d'une option de l'instantané"},
+        "option": {"type": "string",
+                   "description": "select sans clé de profil : libellé exact d'une option de l'instantané"},
         "reason": {"type": "string"},
     },
     "required": ["type", "id", "purpose", "source", "option", "reason"],
@@ -134,8 +138,11 @@ Ton rôle : comprendre la page et dire au programme quoi faire, uniquement avec 
   « lettre » (zone de texte qui demande la lettre de motivation elle-même, le programme y colle la lettre
   envoyée) ou « question » (autre question ouverte) — jamais de valeur libre ;
 - upload {id, source} : source = cv ou lettre ;
-- select {id, option} : option = libellé EXACT d'une option de l'élément, cohérent avec le profil ; une longue
-  liste (options_total) ne montre que les options proches du profil : choisis parmi elles (pays, indicatif…) ;
+- select {id, source} : la liste attend une information du profil (pays, indicatif, ville, diplôme…) :
+  source = la CLÉ DE PROFIL correspondante ; le programme choisit lui-même l'option qui correspond à la valeur,
+  que tu ne connais pas. Une longue liste (options_total) n'est montrée qu'en partie, c'est normal ;
+- select {id, option} : uniquement pour un choix qui ne dépend d'aucune donnée du candidat ; option = libellé
+  EXACT d'une option affichée ;
 - check {id, reason} : uniquement le consentement au traitement de la candidature ou les conditions
   d'utilisation ; jamais une newsletter, une alerte ou un partenaire ;
 - stop {reason} : rien de sûr à faire.
@@ -192,6 +199,7 @@ def profile_values(candidate: dict) -> dict[str, str]:
         "postal_code": identity.get("postal_code"),
         "region": identity.get("region"),
         "country": identity.get("country"),
+        "current_position": current_position(candidate),
     }
     for link in identity.get("links") or []:
         url = link.get("url") if isinstance(link, dict) else link
@@ -219,7 +227,8 @@ def profile_values(candidate: dict) -> dict[str, str]:
 
 
 DOCUMENT_FACT_KEYS = ["first_name", "last_name", "full_name", "email", "phone", "address", "postal_code", "city",
-                      "country", "linkedin", "github", "website", "school", "degree", "graduation", "languages"]
+                      "country", "linkedin", "github", "website", "school", "degree", "graduation", "languages",
+                      "current_position"]
 FACTS_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {"facts": {"type": "array", "items": {
@@ -235,7 +244,10 @@ Chaque valeur doit être COPIÉE MOT POUR MOT depuis le texte (même orthographe
 n'invente rien, ne reformule rien, ne complète rien. Omets une clé absente du texte.
 Pour linkedin, github et website, copie l'adresse telle qu'elle est écrite.
 Pour graduation, l'année d'obtention prévue du diplôme en cours.
+Pour current_position, la situation actuelle écrite dans la section profil ou résumé (« Élève ingénieur en
+cybersécurité », « Étudiant ingénieur informatique »), jamais le titre visé placé en tête du CV ni le poste de l'offre.
 """
+FACTS_VERSION = "2"  # change quand les clés relevées changent : le cache des documents est alors relu
 PHONE_PREFIXES = {"33": "France", "32": "Belgique", "41": "Suisse", "352": "Luxembourg"}
 
 
@@ -290,7 +302,7 @@ def document_facts(files: dict[str, str], cache_dir: Path | None = None) -> dict
     text = "\n\n".join(texts)[:20_000]
     if not text.strip():
         return {}
-    digest = hashlib.sha1(text.encode()).hexdigest()
+    digest = hashlib.sha1((FACTS_VERSION + text).encode()).hexdigest()
     cache = cache_dir / "faits-documents.json" if cache_dir else None
     try:
         cached = json.loads(cache.read_text(encoding="utf-8")) if cache else {}
@@ -305,6 +317,8 @@ def document_facts(files: dict[str, str], cache_dir: Path | None = None) -> dict
     facts = {}
     for item in raw.get("facts") or []:
         key, value = item.get("key"), str(item.get("value") or "").strip()
+        if key == "current_position" and NOT_CURRENT_WORDS & set(_fold(value).split()):
+            continue  # « Stagiaire Pentester » en tête du CV : le poste visé, pas le poste actuel
         if key in DOCUMENT_FACT_KEYS and key not in facts and value and _in_documents(key, value, text):
             facts[key] = value
     if cache:
@@ -353,14 +367,27 @@ def enrich_candidate(candidate: dict, facts: dict[str, str]) -> dict:
             url = facts[key] if facts[key].startswith("http") else "https://" + facts[key]
             links.append({"label": key.capitalize(), "url": url})
     identity["links"] = links
+    if facts.get("current_position") and not current_position(candidate):
+        identity["current_position"] = facts["current_position"]
     return candidate
 
 
 def _profile_catalog(values: dict[str, str]) -> list[dict]:
-    """Catalogue envoyé à l'IA : les questions des réponses types servent de description."""
-    return [{"key": key, "value": value if not key.startswith("answer_") else value[:200],
-             "question": values.get(f"{key}_question", "")}
-            for key, value in values.items() if not key.endswith("_question")]
+    """Interface aveugle : l'IA connaît les variables, jamais leur contenu privé."""
+    return [{"key": key, "type": _source_type(key), "available": True}
+            for key in values if not key.endswith("_question")]
+
+
+def _source_type(key: str) -> str:
+    if key in {"email"}:
+        return "email"
+    if key in {"phone", "phone_national", "phone_country_code"}:
+        return "phone"
+    if key in {"graduation"}:
+        return "date"
+    if key in {"linkedin", "github", "website"}:
+        return "url"
+    return "text"
 
 
 def decide(snap: dict, *, offer: dict, values: dict[str, str], hints: dict | None = None,
@@ -390,21 +417,59 @@ def decide(snap: dict, *, offer: dict, values: dict[str, str], hints: dict | Non
     return decision
 
 
+COUNTRY_ALIASES = {
+    "france": {"fr", "fra", "republique francaise", "french republic"},
+    "belgique": {"belgium", "be", "bel"}, "suisse": {"switzerland", "ch", "che", "schweiz"},
+    "luxembourg": {"lu", "lux"}, "allemagne": {"germany", "de", "deu", "deutschland"},
+    "espagne": {"spain", "es", "esp"}, "italie": {"italy", "it", "ita"},
+    "royaume uni": {"united kingdom", "uk", "gb", "gbr", "great britain"},
+    "etats unis": {"united states", "usa", "us", "united states of america"},
+    "canada": {"ca", "can"}, "maroc": {"morocco", "ma", "mar"}, "algerie": {"algeria", "dz", "dza"},
+    "tunisie": {"tunisia", "tn", "tun"}, "cameroun": {"cameroon", "cm", "cmr"}, "senegal": {"sn", "sen"},
+}
+
+
+def _option_core(text: str) -> str:
+    """« France (+33) » -> « france » ; l'indicatif est comparé à part."""
+    return _squash(re.sub(r"\(.*?\)|\+\d+", " ", text))
+
+
+def match_option(value: str, options: list[str], key: str = "") -> str | None:
+    """Option correspondant à une valeur privée, choisie localement ; None si le doute subsiste."""
+    if not value or not options:
+        return None
+    wanted = _option_core(value) or _squash(value)
+    names = {wanted}
+    for canonical, aliases in COUNTRY_ALIASES.items():
+        if wanted == canonical or wanted in aliases:
+            names |= {canonical, *aliases}
+    code = value.strip() if key == "phone_country_code" else ""
+
+    def exact(option: str) -> bool:
+        return _squash(option) == _squash(value) or _option_core(option) in names
+
+    def coded(option: str) -> bool:
+        return bool(code) and re.search(re.escape(code) + r"(?!\d)", option) is not None
+
+    for test in (exact, coded):
+        found = [option for option in options if test(option)]
+        if found:
+            # « France » et « France (+33) » : la forme la plus courte, sauf pour un indicatif.
+            return max(found, key=lambda option: (coded(option), -len(option)))
+    if len(wanted) >= 4:
+        found = [option for option in options if re.search(r"(?<![a-z0-9])" + re.escape(wanted) + r"(?![a-z0-9])",
+                                                           _squash(option))]
+        if len(found) == 1:
+            return found[0]
+    return None
+
+
 def _compact_options(element: dict, values: dict[str, str], keep: int = 25) -> dict:
-    """Longue liste (pays, indicatifs…) : on envoie les options qui ressemblent aux valeurs du profil."""
+    """Borne les listes sans comparer leurs options à des valeurs privées."""
     options = element.get("options") or []
     if len(options) <= keep:
         return element
-    wanted = [_squash(value) for key, value in values.items()
-              if not key.startswith("answer_") and len(value) <= 80 and _squash(value)]
-
-    def matches(option: str) -> bool:
-        folded = _squash(option)
-        return (any(w in folded or (len(folded) >= 3 and folded in w) for w in wanted)
-                or bool(values.get("phone_country_code")) and values["phone_country_code"] in option)
-
-    useful = [option for option in options if matches(option)][:keep]
-    return element | {"options": useful + [o for o in options[:10] if o not in useful], "options_total": len(options)}
+    return element | {"options": options[:keep], "options_total": len(options), "options_truncated": True}
 
 
 def _element(snap: dict, element_id: object) -> dict | None:
@@ -454,7 +519,19 @@ def validate(raw: dict, snap: dict, values: dict[str, str]) -> dict:
             if element["type"] != "file" or action.get("source") not in FILES:
                 reason = "dépôt de fichier invalide"
         elif kind == "select":
-            if element["tag"] != "select" or action.get("option") not in element.get("options", []):
+            if element["tag"] != "select":
+                reason = "élément non sélectionnable"
+            elif action.get("source"):
+                # Contrat aveugle : l'IA désigne la clé, le rapprochement avec les options reste local.
+                if action["source"] not in keys:
+                    reason = "source hors du profil"
+                else:
+                    option = match_option(values[action["source"]], element.get("options") or [], action["source"])
+                    if option is None:
+                        reason = "aucune option ne correspond au profil"
+                    else:
+                        action = action | {"option": option}
+            elif action.get("option") not in element.get("options", []):
                 reason = "option absente de la liste"
         elif kind == "check":
             if element["type"] not in {"checkbox", "radio"} and element["role"] not in {"checkbox", "radio"}:
@@ -474,9 +551,10 @@ def validate(raw: dict, snap: dict, values: dict[str, str]) -> dict:
 
 
 def review(fields: list[dict], offer: dict) -> list[str]:
-    """Dernier contrôle de cohérence avant l'envoi ; une liste vide signifie « rien à signaler »."""
+    """Relecture structurelle : aucune valeur saisie ou nom de fichier ne sort du processus."""
     payload = {"offre": {"titre": offer.get("title") or "", "entreprise": offer.get("company") or ""},
-               "champs": fields}
+               "champs": [{"label": item.get("label") or "", "source": item.get("source") or "",
+                            "type": item.get("type") or item.get("kind") or "text"} for item in fields]}
     try:
         result = ai.ask_ai(REVIEW_PROMPT + "\nDONNÉES :\n" + json.dumps(payload, ensure_ascii=False),
                            REVIEW_SCHEMA, "tailoring") or {}

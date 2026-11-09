@@ -13,7 +13,7 @@ from . import application_adapters, config, db, profile, tailoring, workflow
 
 LOGGER = logging.getLogger(__name__)
 MANUAL_ONLY_HOSTS = {"indeed", "linkedin"}
-ASSISTED_PROVIDERS = {"greenhouse", "lever", "smartrecruiters", "workday", "generic"}
+ASSISTED_PROVIDERS = {"greenhouse", "lever", "smartrecruiters", "workday", "welcometothejungle", "generic"}
 REVIEW_POLICIES = {"first_five", "always", "never"}
 DEFAULT_PREFERENCES = {"mode": "manual", "include_letter": True, "review_policy": "first_five"}
 
@@ -34,6 +34,8 @@ def provider_for(url: str) -> str:
         return "smartrecruiters"
     if "myworkdayjobs.com" in host or host.endswith("workday.com"):
         return "workday"
+    if host == "welcometothejungle.com" or host.endswith(".welcometothejungle.com"):
+        return "welcometothejungle"
     return "generic"
 
 
@@ -67,6 +69,12 @@ def options(application_id: int) -> dict:
     provider = provider_for(url)
     documents = db.list_documents(application_id)
     candidates = [item for item in documents if item["status"] == "pret" and item.get("ats", {}).get("ready") is True]
+    # Défense supplémentaire pour les anciennes bases qui pourraient encore contenir plusieurs
+    # versions « prêtes » : la liste est triée par version décroissante, une seule par type sort.
+    active = {}
+    for item in candidates:
+        active.setdefault(item["kind"], item)
+    candidates = list(active.values())
     ready, stale = [], []
     for item in candidates:
         check = tailoring.current_check(item["id"])
@@ -75,9 +83,7 @@ def options(application_id: int) -> dict:
         else:
             stale.append({"id": item["id"], "kind": item["kind"], "version": item["version"],
                           "message": check["message"]})
-    latest = {}
-    for item in ready:
-        latest.setdefault(item["kind"], item["id"])
+    latest = {item["kind"]: item["id"] for item in ready}
     assisted_allowed = provider not in MANUAL_ONLY_HOSTS
     reason = None if assisted_allowed else "LinkedIn et Indeed sont disponibles uniquement en mode manuel."
     return {
@@ -99,11 +105,13 @@ def _manual_help(application_id: int, attempt: dict) -> dict:
     documents = []
     for document_id in selected:
         document = db.get_document(document_id)
+        pdf = next((item for item in document["files"] if item["name"].lower().endswith(".pdf")), None)
+        selected_file = pdf or (document["files"][0] if document["files"] else None)
         documents.append({
             "id": document["id"], "kind": document["kind"], "version": document["version"],
-            "files": [{"name": item["name"],
-                       "url": f"/api/documents/{document['id']}/file?name={quote(item['name'], safe='')}"}
-                      for item in document["files"]],
+            "files": ([{"name": selected_file["name"],
+                        "url": f"/api/documents/{document['id']}/file?name={quote(selected_file['name'], safe='')}"}]
+                      if selected_file else []),
         })
     return {
         "attempt": attempt,
@@ -302,5 +310,8 @@ def selected_file_paths(attempt_id: int) -> list[Path]:
     for document_id in (attempt["cv_document_id"], attempt["letter_document_id"]):
         if document_id:
             document = db.get_document(document_id)
-            paths.extend(tailoring.document_file(document_id, item["name"]) for item in document["files"])
+            pdf = next((item for item in document["files"] if item["name"].lower().endswith(".pdf")), None)
+            selected = pdf or (document["files"][0] if document["files"] else None)
+            if selected:
+                paths.append(tailoring.document_file(document_id, selected["name"]))
     return paths

@@ -45,6 +45,7 @@ SUBMIT_SELECTORS = {
     "lever": ("button[type=submit]", ".postings-btn-submit"),
     "smartrecruiters": ("button[type=submit]", "button[data-test=submit-application]"),
     "workday": ("button[data-automation-id=bottom-navigation-next-button]", "button[type=submit]"),
+    "welcometothejungle": ("button[type=submit]", "input[type=submit]", "button[data-testid*=submit]"),
     "generic": ("button[type=submit]", "input[type=submit]"),
 }
 WORKDAY_MAX_STEPS = 8
@@ -270,7 +271,8 @@ def _paste_resume(plan: dict, files: dict) -> dict:
                "confidence": 1.0, "source": "document:cv_texte", "label": item["label"]} for item in wanted]
     selectors = {item["selector"] for item in wanted}
     interventions = [item for item in plan["interventions"] if item["selector"] not in selectors]
-    return {"values": [*plan["values"], *values], "interventions": interventions, "ready": not interventions}
+    return {**plan, "values": [*plan["values"], *values], "interventions": interventions,
+            "ready": not interventions}
 
 
 NEXT_LABELS = re.compile(r"^\s*(next|suivant|continuer|continue|save and continue|étape suivante)\s*$", re.I)
@@ -415,9 +417,19 @@ def _captcha_visible(page) -> bool:
         return False
 
 
+def _visible_password(page) -> bool:
+    """Champ mot de passe réellement affiché : la fenêtre de connexion cachée d'un en-tête (Handicap-Job)
+    reste dans le DOM sans rien demander, et ne doit pas passer pour un mur de connexion."""
+    fields = page.locator(BLOCK_SELECTORS[0])
+    try:
+        return any(fields.nth(index).is_visible() for index in range(fields.count()))
+    except PlaywrightError:
+        return False
+
+
 def _blocked(page, body_text: str) -> bool:
     """Détecte un vrai mur interactif, sans confondre un lien de pied de page."""
-    if page.locator(BLOCK_SELECTORS[0]).count() or _captcha_visible(page):
+    if _visible_password(page) or _captcha_visible(page):
         return True
     # Un écran de choix peut proposer « Log in » à côté de « From Device » : la connexion est alors
     # facultative et ne doit pas masquer la voie de candidature directe.
@@ -429,7 +441,7 @@ def _blocked(page, body_text: str) -> bool:
 
 def _try_login(page) -> bool:
     """Tente une seule soumission d'identifiants correspondant strictement au domaine courant."""
-    if not page.locator('input[type="password"]').count():
+    if not _visible_password(page):
         return False
     credential = login_credentials.for_host(urlsplit(page.url).hostname or "")
     if not credential:
@@ -1063,6 +1075,71 @@ def _choose_resume_method(page, files: dict) -> bool:
     return False
 
 
+def _prepare_wttj_profile_form(page, files: dict) -> bool:
+    """Sur WTTJ, remplace le CV du profil même si le dépôt est caché derrière « Modifier/Remplacer ».
+
+    Le bouton peut soit révéler un input fichier React, soit ouvrir directement le sélecteur natif.
+    La fonction reste sans effet sur les formulaires externes et ne clique jamais sur « Postuler ».
+    """
+    cv = files.get("cv")
+    if not cv or "welcometothejungle.com" not in (urlsplit(page.url).hostname or ""):
+        return False
+    upload = page.locator('input[type="file"]')
+    if upload.count():
+        return False  # le plan déterministe s'en chargera et le vérifiera
+    actions = page.locator("button, [role=button], label")
+    for index in range(min(actions.count(), 100)):
+        button = actions.nth(index)
+        try:
+            text = application_adapters._fold(button.inner_text(timeout=250))
+            if not button.is_visible() or "cv" not in text or not any(
+                    word in text for word in ("ajouter", "importer", "modifier", "remplacer", "televerser", "upload")):
+                continue
+            try:
+                with page.expect_file_chooser(timeout=2_000) as chooser:
+                    button.click(timeout=5_000)
+                chooser.value.set_files(cv)
+            except PlaywrightError:
+                revealed = page.locator('input[type="file"]')
+                if revealed.count():
+                    revealed.first.set_input_files(cv)
+                else:
+                    return False
+            page.wait_for_timeout(700)
+            return True
+        except PlaywrightError:
+            continue
+    return False
+
+
+def _confirm_wttj_address(page, form, plan: dict) -> bool:
+    """Valide la suggestion d'adresse WTTJ après correction d'un champ autocomplété."""
+    if "welcometothejungle.com" not in (urlsplit(page.url).hostname or ""):
+        return False
+    address = next((item for item in plan["values"] if item.get("source") == "profil:street address"), None)
+    if address is None:
+        address = next((item for item in plan["values"] if str(item.get("source") or "").startswith("profil:adresse")), None)
+    if address is None:
+        return False
+    try:
+        field = form.locator(address["selector"]).first
+        field.focus()
+        page.wait_for_timeout(500)
+        options = page.locator('[role="option"]:visible')
+        if options.count():
+            options.first.click(timeout=3_000)
+            page.wait_for_timeout(300)
+            # L'autocomplétion peut normaliser « 12 rue… » en adresse complète. Cette valeur vient
+            # bien du choix proposé à partir de l'adresse du profil et doit être celle que la relecture compare.
+            selected = field.input_value()
+            if selected:
+                address["value"] = selected
+            return True
+    except PlaywrightError:
+        pass
+    return False
+
+
 def _wait_for_application_ui(page, provider: str, timeout_ms: int = RENDER_WAIT_MS) -> str:
     deadline = time.monotonic() + timeout_ms / 1000
     while time.monotonic() < deadline:
@@ -1333,6 +1410,29 @@ def _navigation_click(page, target) -> None:
         target.dispatch_event("click", timeout=3_000)
 
 
+NEW_TAB_WAIT_MS = 8_000
+
+
+def _opens_new_tab(target) -> bool:
+    try:
+        return (target.get_attribute("target", timeout=2_000) or "").casefold() == "_blank"
+    except PlaywrightError:
+        return False
+
+
+def _new_tabs(page, before: set, *, wait: bool) -> set:
+    """Onglets ouverts par le clic. Un lien « Postuler » en target=_blank (Handicap-Job → Talents Handicap)
+    met souvent plus d'une seconde à ouvrir son onglet : sans cette attente, le robot recliquait en boucle."""
+    url = page.url
+    waited = 0
+    while True:
+        page.wait_for_timeout(250 if waited else 500)
+        waited += 250 if waited else 500
+        opened = set(page.context.pages) - before
+        if opened or not wait or page.url != url or waited >= NEW_TAB_WAIT_MS:
+            return opened
+
+
 def _clickable(page, button) -> bool:
     """Essai à blanc du bouton d'envoi : une fenêtre qui l'intercepte est fermée par Échap, sinon on s'arrête."""
     for attempt in range(2):
@@ -1502,13 +1602,13 @@ def _ai_navigate(page, attempt: dict, provider: str, supervision: _Supervision, 
             before = set(page.context.pages)
             target = page.locator(f'[data-jobradar-id="{item["id"]}"]').first
             try:
+                new_tab = _opens_new_tab(target)
                 _navigation_click(page, target)
             except PlaywrightError as exc:
                 executed.append(f"clic n°{item['id']} ({item['purpose']}) impossible : {exc.message[:120]}")
                 continue
             executed.append(f"clic n°{item['id']} ({item['purpose']}) : {item['reason']}")
-            page.wait_for_timeout(500)
-            opened = set(page.context.pages) - before
+            opened = _new_tabs(page, before, wait=new_tab)
             if opened:
                 page = opened.pop()
                 page.wait_for_load_state("domcontentloaded", timeout=45_000)
@@ -1663,12 +1763,11 @@ def _supervise_form(form, page, plan: dict, supervision: _Supervision, files: di
 
 
 def _final_review(plan: dict, supervision: _Supervision) -> list[str]:
-    """Contrôle de cohérence de l'IA ; rien de sensible ni aucun chemin local n'est transmis."""
+    """Contrôle structurel de l'IA, sans valeurs privées ni noms de fichiers."""
     if supervision.mode == "off" or not supervision.available:
         return []
-    fields = [{"label": item.get("label") or "Champ",
-               "valeur": Path(str(item["value"])).name if item.get("kind") == "file" else item.get("value")}
-              for item in plan["values"]]
+    fields = [{"label": item.get("label") or "Champ", "source": item.get("source") or "local",
+               "type": item.get("kind") or "text"} for item in plan["values"]]
     try:
         issues = application_supervisor.review(fields, supervision.offer)
     except application_supervisor.SupervisionError as exc:
@@ -1703,7 +1802,7 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
     final_submit = None
     login_attempted = False
     # Une page générique peut mener, via « Postuler », à un formulaire Workday en plusieurs étapes.
-    max_steps = WORKDAY_MAX_STEPS if provider in {"workday", "generic"} else 1
+    max_steps = WORKDAY_MAX_STEPS if provider in {"workday", "welcometothejungle", "generic"} else 1
     for step in range(max_steps):
         if step == 0 and not resumed:
             if _choose_resume_method(page, files):
@@ -1726,6 +1825,8 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
                     _after_human_step(attempt, outcome, page)
                     return None
                 supervision.journal.note("Étape terminée de ton côté : reprise automatique.")
+        if provider == "welcometothejungle" and _prepare_wttj_profile_form(page, files):
+            supervision.journal.note("CV adapté chargé dans le formulaire du profil Welcome to the Jungle.")
         located = _locate(page, attempt, provider, step, supervision)
         if located is None:
             return None
@@ -1779,6 +1880,8 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
                                            application, letter_text, lang)
         plan = _merge_user_answers(plan, attempt.get("answers") or [])
         _fill(form, plan)
+        if provider == "welcometothejungle" and _confirm_wttj_address(page, form, plan):
+            supervision.journal.note("Suggestion d'adresse Welcome to the Jungle validée.")
         if any(item["kind"] == "file" for item in plan["values"]):
             _settle(page)  # le site analyse souvent le CV déposé avant d'accepter la suite (Phenom, Workday)
         verification_issues = _verify_filled(form, plan)

@@ -198,6 +198,8 @@ def test_login_is_attempted_once_by_session_logic(monkeypatch) -> None:
     monkeypatch.setattr(application_browser.login_credentials, "for_host", lambda host: calls.append(host) or None)
     class Locator:
         def count(self): return 1
+        def nth(self, index): return self
+        def is_visible(self): return True
     class Page:
         url = "https://login.example.com/signin"
         def locator(self, selector): return Locator()

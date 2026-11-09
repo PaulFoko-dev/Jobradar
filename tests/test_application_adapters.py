@@ -61,6 +61,29 @@ def test_postal_address_fields_are_filled_from_the_local_profile() -> None:
     assert plan["ready"] is True
 
 
+def test_formulaire_interne_wttj_corrige_le_profil_et_charge_les_documents() -> None:
+    html = """<div role="dialog"><form method="post">
+      <label>Prénom<input name="candidate[first_name]" required></label>
+      <label>Nom de famille<input name="candidate[last_name]" required></label>
+      <label>Adresse postale<input name="candidate[address]" role="combobox" required></label>
+      <label>Code postal<input name="candidate[postal_code]" required></label>
+      <label>Ville<input name="candidate[city]" required></label>
+      <label>CV<input name="candidate[resume]" type="file" required></label>
+      <label>Message de motivation<textarea name="candidate[motivation]" required></textarea></label>
+    </form></div>"""
+    fields = adapter_for("welcometothejungle").parse(html)
+    candidate = _candidate()
+    candidate["identity"] |= {"address_line1": "12 rue des Lilas", "postal_code": "75011", "city": "Paris"}
+    plan = fill_plan(fields, candidate, {"cv": "/safe/CV-adapte.pdf"}, ai_metadata=True)
+    values = {item["label"]: item["value"] for item in plan["values"]}
+    assert values | {"Message de motivation": ""} == {
+        "Prénom": "Alice", "Nom de famille": "Martin", "Adresse postale": "12 rue des Lilas",
+        "Code postal": "75011", "Ville": "Paris", "CV": "/safe/CV-adapte.pdf",
+        "Message de motivation": "",
+    }
+    assert plan["interventions"][0]["classification"] == "motivation"
+
+
 @pytest.mark.parametrize("label", ["Adresse ligne 2", "Address line 2", "Complément d'adresse", "Country code"])
 def test_secondary_address_and_country_code_fields_are_not_filled_with_the_address(label) -> None:
     fields = [Field(name="field", label=label, kind="text", required=False, selector="#field")]
@@ -380,3 +403,42 @@ def test_seul_depot_sans_libelle_recoit_le_cv() -> None:
     other = Field("#extra", "extra", "Fichiers supplémentaires", "file", False)
     assert fill_plan([drop], _candidate(), {"cv": "/safe/CV.pdf"})["values"][0]["value"] == "/safe/CV.pdf"
     assert fill_plan([drop, other], _candidate(), {"cv": "/safe/CV.pdf"})["values"] == []
+
+
+def test_formulaire_wttj_poste_actuel_deduit_du_profil_et_lettre_facultative_remplie(monkeypatch) -> None:
+    from jobradar.application_adapters import ai_plan
+    monkeypatch.setattr(ai, "ask_ai", lambda *_a: pytest.fail("aucun appel IA attendu"))
+    html = """<div role="dialog"><form method="post">
+      <label>Prénom<input name="firstname" required></label>
+      <label>Poste actuel<input name="subtitle" required></label>
+      <label>CV<input name="resume" type="file" required></label>
+      <label>Lettre de motivation Optionnel<textarea name="cover_letter"
+        placeholder="Expliquez-nous pourquoi vous souhaitez nous rejoindre"></textarea></label>
+    </form></div>"""
+    fields = adapter_for("welcometothejungle").parse(html)
+    candidate = _candidate() | {"summary": "Élève ingénieur en cybersécurité à 3iL Ingénieurs, je recherche un stage."}
+    plan = fill_plan(fields, candidate, {"cv": "/safe/CV.pdf"}, ai_metadata=True)
+    values = {item["label"]: item["value"] for item in plan["values"]}
+    assert values["Poste actuel"] == "Élève ingénieur en cybersécurité"
+    assert plan["ready"] is True and plan["optional"][0]["classification"] == "motivation"
+    paragraphs = ["Madame, Monsieur,", "Je souhaite rejoindre Patrowl.", "Cordialement."]
+    result = ai_plan(plan, candidate, {"company": "Patrowl"}, "", "fr", {"letter_paragraphs": paragraphs})
+    letter = next(item for item in result["values"] if item["selector"] == '[name="cover_letter"]')
+    assert letter["value"] == "\n\n".join(paragraphs) and letter["source"] == "document:lettre"
+    assert result["ready"] is True
+
+
+def test_motivation_facultative_impossible_ne_bloque_pas_l_envoi(monkeypatch) -> None:
+    from jobradar.application_adapters import ai_plan
+    monkeypatch.setattr(ai, "ask_ai", lambda *_a: (_ for _ in ()).throw(ai.AIError("quota")))
+    field = {"selector": "#m", "label": "Pourquoi nous ?", "classification": "motivation",
+             "input_kind": "textarea", "maxlength": None, "kind": "optional"}
+    result = ai_plan({"values": [], "interventions": [], "ready": True, "optional": [field]},
+                     {"identity": {}}, {"company": "Acme"}, "", "fr", {})
+    assert result == {"values": [], "interventions": [], "ready": True}
+
+
+@pytest.mark.parametrize("summary", ["Stagiaire Pentester / Security Researcher", "Élève ingénieur en recherche de stage."])
+def test_le_poste_vise_n_est_jamais_pris_pour_le_poste_actuel(summary) -> None:
+    from jobradar.application_adapters import current_position
+    assert current_position({"summary": summary}) is None

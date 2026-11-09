@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup, Tag
 
 from . import ai
 
-SUPPORTED = {"greenhouse", "lever", "smartrecruiters", "workday", "generic"}
+SUPPORTED = {"greenhouse", "lever", "smartrecruiters", "workday", "welcometothejungle", "generic"}
 SENSITIVE_TERMS = {
     "handicap", "disability", "gender", "genre", "ethnicity", "origine ethnique", "veteran",
     "religion", "situation familiale", "marital", "antecedent", "criminal", "race",
@@ -116,7 +116,7 @@ class Adapter:
         """Trouve le formulaire de candidature et ses champs ; échoue fermé si aucun n'est reconnu."""
         soup = BeautifulSoup(html or "", "html.parser")
         forms = soup.find_all("form")
-        if self.provider == "generic":
+        if self.provider in {"generic", "welcometothejungle"}:
             form = next((candidate for candidate in forms if _is_application_form(candidate)), None)
             if form is None:
                 # Ashby et plusieurs modales React n'emploient aucune balise <form>.
@@ -159,6 +159,10 @@ ADAPTERS = {
     # Les tenants Workday personnalisent leurs identifiants, mais conservent
     # les attributs data-automation-id et un formulaire HTML standard.
     "workday": Adapter("workday", ("form[data-automation-id='applyForm']", "form")),
+    # Le formulaire interne WTTJ est une modale React et ses noms de champs peuvent évoluer ;
+    # on conserve donc la détection structurelle sûre du générique, avec un fournisseur identifié
+    # pour les interactions propres au profil candidat (CV existant, adresse autocomplétée).
+    "welcometothejungle": Adapter("welcometothejungle", ("form", "[role='dialog']")),
     "generic": Adapter("generic", ("form",)),
 }
 
@@ -207,6 +211,33 @@ def _profile_facts(candidate: dict) -> list[str]:
             facts.append(str(value).strip())
     visit(candidate)
     return facts
+
+
+CURRENT_POSITION_TERMS = ("poste actuel", "current position", "current title", "current job", "current role",
+                          "fonction actuelle", "situation actuelle", "situation professionnelle", "headline",
+                          "subtitle")
+# « Élève ingénieur en cybersécurité à 3iL… » : la situation actuelle, telle que l'écrit la section profil du CV.
+STUDENT_PHRASE = re.compile(
+    r"\b((?:élève|eleve|étudiante?|etudiante?|student)\b[^,.;:\n]*?)(?=\s+(?:à|au|aux|at|chez)\s|[,.;:\n]|$)",
+    re.IGNORECASE)
+NOT_CURRENT_WORDS = {"stage", "stagiaire", "intern", "internship", "alternance", "alternant", "recherche"}
+
+
+def current_position(candidate: dict) -> str | None:
+    """Poste actuel du candidat : saisi dans le profil, sinon déduit de son résumé (« Élève ingénieur… »).
+
+    Le titre placé en tête du CV (« Stagiaire Pentester ») est le poste visé, jamais le poste actuel.
+    """
+    identity = candidate.get("identity") if isinstance(candidate.get("identity"), dict) else {}
+    explicit = str(identity.get("current_position") or candidate.get("current_position") or "").strip()
+    if explicit:
+        return explicit
+    match = STUDENT_PHRASE.search(str(candidate.get("summary") or ""))
+    if match:
+        phrase = " ".join(match.group(1).split())
+        if 2 <= len(phrase.split()) <= 8 and not NOT_CURRENT_WORDS & set(_fold(phrase).split()):
+            return phrase[0].upper() + phrase[1:]
+    return None
 
 
 GENERIC_TITLE_WORDS = {"stage", "stagiaire", "intern", "internship", "alternance", "alternant", "apprenti",
@@ -284,7 +315,7 @@ def full_letter(paragraphs: list[str] | None, maxlength: int | None) -> str | No
 
 def asks_for_letter(field: dict) -> bool:
     return field.get("input_kind") == "textarea" and any(
-        term in _fold(field.get("label")) for term in ("lettre", "cover letter"))
+        term in _fold(f"{field.get('name') or ''} {field.get('label') or ''}") for term in ("lettre", "cover letter"))
 
 
 def motivation_message(candidate: dict, offer: dict, letter_text: str, language: str,
@@ -316,22 +347,30 @@ def ai_plan(plan: dict, candidate: dict, offer: dict, letter_text: str = "", lan
     """Complète les questions ouvertes pour tous les fournisseurs, sans jamais traiter le sensible."""
     cache = motivation_cache if motivation_cache is not None else {}
     pending = [item for item in plan["interventions"] if item.get("kind") != "sensitive"]
+    # Zone « Lettre de motivation (facultatif) » : remplie avec la lettre envoyée, sans jamais bloquer l'envoi.
+    optional = [item for item in plan.get("optional") or [] if item.get("kind") != "sensitive"]
     accepted = {}
     motivations = []
-    for item in (item for item in pending if item.get("classification") == "motivation"):
+    for item in (item for item in [*pending, *optional] if item.get("classification") == "motivation"):
         letter = full_letter(cache.get("letter_paragraphs"), item.get("maxlength")) if asks_for_letter(item) else None
         if letter:
             accepted[item["selector"]] = {"selector": item["selector"], "value": letter, "kind": "textarea",
                                           "confidence": 1.0, "source": "document:lettre", "label": item["label"]}
         else:
             motivations.append(item)
+    required_motivations = [item for item in motivations if item not in optional]
     if motivations:
         strictest = min((item.get("maxlength") or 600 for item in motivations), default=600)
         message = cache.get("message")
-        if not message or len(message) > min(strictest, 600):
-            message = (letter_excerpt(cache.get("letter_paragraphs"), strictest)
-                       or motivation_message(candidate, offer, letter_text, language, strictest))
-            cache["message"] = message
+        try:
+            if not message or len(message) > min(strictest, 600):
+                message = (letter_excerpt(cache.get("letter_paragraphs"), strictest)
+                           or motivation_message(candidate, offer, letter_text, language, strictest))
+                cache["message"] = message
+        except (ai.AIError, ValueError):
+            if required_motivations:
+                raise
+            motivations, message = [], None  # champ facultatif : laissé vide plutôt que bloquer l'envoi
         for field in motivations:
             accepted[field["selector"]] = {"selector": field["selector"], "value": message,
                 "kind": field.get("input_kind") or "text", "confidence": 1.0,
@@ -592,6 +631,7 @@ def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *
         (COUNTRY_TERMS, identity.get("country")),
         # Ville de résidence (adresse postale) d'abord ; la ville du CV sinon.
         (("city", "ville", "location", "localisation"), identity.get("residence_city") or identity.get("city")),
+        (CURRENT_POSITION_TERMS, current_position(candidate)),
     ]
     name_rules = [terms for terms, _ in known[3:6]]  # prénom, nom, nom complet
     standard = candidate.get("standard_answers") if isinstance(candidate.get("standard_answers"), dict) else {}
@@ -610,7 +650,7 @@ def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *
         answer = source_answer([member.label for member in members])
         if answer is not None:
             chosen_sources |= {member.selector: member.label == answer for member in members}
-    values, interventions, answered = [], [], set()
+    values, interventions, optional, answered = [], [], [], set()
     for field in fields:
         folded = _fold(f"{field.name} {field.label}")
         value, confidence, source = None, 0.0, None
@@ -687,17 +727,25 @@ def fill_plan(fields: list[Field], candidate: dict, documents: dict[str, str], *
                             if field.sensitive else "Information obligatoire absente ou ambiguë."),
             }
             if ai_metadata:
-                intervention |= {"maxlength": field.maxlength, "classification": field.classification}
+                intervention |= {"name": field.name, "maxlength": field.maxlength,
+                                 "classification": field.classification}
             interventions.append(intervention)
+        elif ai_metadata and field.kind == "textarea" and field.classification == "motivation":
+            optional.append({"selector": field.selector, "name": field.name, "label": field.label,
+                             "kind": "optional", "input_kind": field.kind, "options": [],
+                             "maxlength": field.maxlength, "classification": field.classification})
     # La variante « je n'accepte pas » d'une paire n'attend rien de toi quand son « j'accepte » est coché.
     if any(item["source"] == "regle:consentement_candidature" for item in values):
         negative = {field.selector for field in fields if field.kind == "checkbox"
                     and any(word in _fold(field.label) for word in NEGATION_WORDS)}
         interventions = [item for item in interventions if item["selector"] not in negative]
         fields = [field for field in fields if field.selector not in negative]
-    return {"values": values, "interventions": interventions,
+    plan = {"values": values, "interventions": interventions,
             "ready": not interventions and all(any(item["selector"] == field.selector for item in values)
                                                 for field in fields if field.required and field.selector not in answered)}
+    if optional:
+        plan["optional"] = optional
+    return plan
 
 
 def generic_ai_plan(plan: dict, candidate: dict) -> dict:

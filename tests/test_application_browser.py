@@ -137,17 +137,24 @@ def test_confirmation_uses_explicit_text_or_url(url, text, expected) -> None:
 
 def test_block_detection_ignores_footer_link_but_detects_login_form() -> None:
     class Locator:
-        def __init__(self, count):
-            self._count = count
+        def __init__(self, count, visible=True):
+            self._count, self._visible = count, visible
 
         def count(self):
             return self._count
 
+        def nth(self, _index):
+            return self
+
+        def is_visible(self):
+            return self._visible
+
     class Page:
         password = False
+        visible = True
 
         def locator(self, selector):
-            return Locator(1 if self.password and "password" in selector else 0)
+            return Locator(1 if self.password and "password" in selector else 0, self.visible)
 
         def evaluate(self, *_args):
             return False
@@ -157,6 +164,27 @@ def test_block_detection_ignores_footer_link_but_detects_login_form() -> None:
     assert application_browser._blocked(page, long_page.casefold()) is False
     page.password = True
     assert application_browser._blocked(page, long_page.casefold()) is True
+    # Handicap-Job : fenêtre de connexion cachée derrière le lien « Connexion » de l'en-tête.
+    page.visible = False
+    assert application_browser._blocked(page, long_page.casefold()) is False
+
+
+def test_mot_de_passe_cache_d_une_fenetre_de_connexion_n_est_pas_un_mur() -> None:
+    from playwright.sync_api import sync_playwright
+
+    html = """<header><a href="#">Connexion</a><div class="modal" style="display:none">
+      <input type="email"><input type="password"></div></header>
+      <main><h1>Stage Ingénieur(e) EPP / EDR</h1><p>""" + "Description de l'offre. " * 120 + """</p>
+      <a href="/r/abc" target="_blank">Postuler Maintenant</a></main>"""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        body = page.locator("body").inner_text().casefold()
+        assert application_browser._blocked(page, body) is False
+        page.evaluate("document.querySelector('.modal').style.display = 'block'")
+        assert application_browser._blocked(page, body) is True
+        browser.close()
 
 
 def test_unnamed_fields_and_checkbox_question_are_read_from_the_live_page() -> None:
@@ -256,4 +284,21 @@ def test_frozen_tab_is_reloaded_before_connecting(tmp_path) -> None:
         stuck.wait_for_timeout(800)  # la boucle infinie a démarré
         reloaded = application_browser._unfreeze_tabs(port)
         assert reloaded == [frozen.as_uri()]
+        browser.close()
+
+
+def test_onglet_ouvert_lentement_par_postuler_est_attendu() -> None:
+    from playwright.sync_api import sync_playwright
+
+    # Handicap-Job : « Postuler Maintenant » en target=_blank ouvre Talents Handicap avec du retard.
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.set_content("""<a id="go" target="_blank" href="about:blank"
+            onclick="event.preventDefault(); setTimeout(() => window.open('about:blank'), 1500)">Postuler</a>""")
+        target = page.locator("#go")
+        before = set(page.context.pages)
+        assert application_browser._opens_new_tab(target) is True
+        target.click()
+        assert len(application_browser._new_tabs(page, before, wait=True)) == 1
         browser.close()
