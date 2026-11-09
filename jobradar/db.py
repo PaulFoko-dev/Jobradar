@@ -75,14 +75,123 @@ def _date(value: object) -> date | None:
         return None
 
 
+# Colonnes privées, chiffrées au repos dès que le coffre existe (valeurs « jrv1:… »). Aucune requête ne filtre
+# sur leur contenu : seules l'écriture (déclencheurs temporaires) et la lecture (fabrique de lignes) les voient.
+PRIVATE_COLUMNS = {
+    "applications": ("notes", "history_json", "offer_snapshot_json"),
+    "application_attempts": ("answers_json", "intervention_json", "error"),
+    "documents": ("composition_json", "files_json"),
+    "notifications": ("payload_json",),
+    "preparation_jobs": ("params_json", "result_json", "error"),
+    "application_contacts": ("name", "email", "phone", "profile_url", "context", "notes"),
+    "interviews": ("location", "meeting_url", "notes"),
+    "interview_preparations": ("content_json",),
+    "interview_simulations": ("questions_json", "turns_json"),
+}
+ENCRYPTED_PREFIX = "jrv1:"
+
+
+def _encrypt_column(column: str, value):
+    """Fonction SQL ``jr_enc`` : chiffre si le coffre existe ; s'il est fermé, l'écriture privée échoue."""
+    from . import private_io, vault
+
+    if not isinstance(value, str) or value.startswith(ENCRYPTED_PREFIX) or not private_io._vault_active():
+        return value
+    return vault.encrypt_value(value, f"db.{column}")
+
+
+class _Row:
+    """Ligne déchiffrée à la volée, utilisable comme ``sqlite3.Row`` (clés, index, ``dict(row)``)."""
+
+    __slots__ = ("_names", "_values")
+
+    def __init__(self, names: tuple[str, ...], values: tuple) -> None:
+        self._names, self._values = names, values
+
+    def keys(self) -> list[str]:
+        return list(self._names)
+
+    def __getitem__(self, key):
+        if isinstance(key, int | slice):
+            return self._values[key]
+        try:
+            return self._values[self._names.index(key)]
+        except ValueError:
+            raise IndexError(f"No item with that key: {key}") from None
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, _Row) and self._names == other._names and self._values == other._values
+
+    __hash__ = None
+
+
+def _row_factory(cursor, values: tuple) -> _Row:
+    names = tuple(column[0] for column in cursor.description)
+    if any(isinstance(value, str) and value.startswith(ENCRYPTED_PREFIX) for value in values):
+        from . import vault
+
+        values = tuple(vault.decrypt_value(value, f"db.{name}")
+                       if isinstance(value, str) and value.startswith(ENCRYPTED_PREFIX) else value
+                       for name, value in zip(names, values, strict=True))
+    return _Row(names, values)
+
+
+def _install_encryption(conn: sqlite3.Connection) -> None:
+    """Déclencheurs TEMPORAIRES (propres à cette connexion) : une connexion SQLite brute reste utilisable."""
+    conn.create_function("jr_enc", 2, _encrypt_column, deterministic=False)
+    existing = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table, columns in PRIVATE_COLUMNS.items():
+        if table not in existing:
+            continue
+        present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column in (column for column in columns if column in present):
+            guard = f"NEW.{column} IS NOT NULL AND substr(NEW.{column}, 1, 5) <> '{ENCRYPTED_PREFIX}'"
+            action = f"UPDATE {table} SET {column} = jr_enc('{column}', NEW.{column}) WHERE rowid = NEW.rowid"
+            for event in ("INSERT", f"UPDATE OF {column}"):
+                name = f"jr_enc_{table}_{column}_{event.split()[0].lower()}"
+                conn.execute(f"CREATE TEMP TRIGGER IF NOT EXISTS {name} AFTER {event} ON main.{table} "
+                             f"WHEN {guard} BEGIN {action}; END")
+
+
+def encrypt_existing() -> int:
+    """Migration reprenable : chiffre chaque valeur privée encore en clair, puis efface les traces du clair."""
+    total = 0
+    with connect() as c:
+        for table, columns in PRIVATE_COLUMNS.items():
+            present = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+            for column in (column for column in columns if column in present):
+                total += c.execute(
+                    f"UPDATE {table} SET {column} = {column} WHERE {column} IS NOT NULL "
+                    f"AND substr({column}, 1, 5) <> '{ENCRYPTED_PREFIX}'").rowcount
+    conn = sqlite3.connect(config.DB_PATH, timeout=30)
+    try:
+        conn.execute("PRAGMA secure_delete = ON")
+        conn.execute("VACUUM")  # réécrit la base : aucune ancienne page en clair ne subsiste
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    return total
+
+
 @contextmanager
 def connect():
     # Chemins relus à chaque connexion : JOBRADAR_DATA_DIR et les tests les redirigent.
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(config.DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = _row_factory
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA secure_delete = ON")
+    from . import private_io
+
+    if private_io._vault_active():  # sans coffre, rien à chiffrer : aucun déclencheur, aucun surcoût
+        _install_encryption(conn)
     try:
         yield conn
         conn.commit()

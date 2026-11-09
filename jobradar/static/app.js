@@ -2668,6 +2668,15 @@ function archivesSettingsHtml() {
       <div id="aInfo" class="arch-info" aria-live="polite"><p class="muted small"><span class="spinner dark"></span> Lecture du dossier des archives…</p></div>
 
       <fieldset class="e-group">
+        <legend>Coffre chiffré</legend>
+        <p class="muted small" id="vInfo">Lecture de l'état du coffre…</p>
+        <label class="vault-check"><input type="checkbox" id="vConsent"> Autoriser l'envoi du contenu professionnel de mes CV
+          à l'IA (jamais l'identité ni les coordonnées)</label>
+        <div class="arch-row"><button class="btn" id="vOpen" hidden>Activer le coffre</button>
+          <button class="btn" id="vMigrate" hidden>Chiffrer les données restantes</button></div>
+      </fieldset>
+
+      <fieldset class="e-group">
         <legend>Exporter le suivi</legend>
         <p class="muted small">Tableau de toutes tes candidatures (statut, dates, relances, entretiens), lisible dans Excel ou LibreOffice.</p>
         <div class="arch-row"><a class="btn" href="/api/export/applications.csv" download>Exporter le suivi (CSV)</a></div>
@@ -2745,6 +2754,21 @@ function loadArchivesSettings() {
 }
 
 function bindArchivesSettings() {
+  api("/api/vault").then(vaultState => {
+    $("#vInfo").textContent = !vaultState.initialized ? "Coffre non activé : tes données sont en clair sur le disque."
+      : vaultState.unlocked ? "Coffre actif et déverrouillé : tes données privées sont chiffrées sur le disque."
+      : "Coffre verrouillé : saisis ta clé de récupération au prochain chargement.";
+    $("#vConsent").checked = vaultState.cv_consent;
+    $("#vConsent").disabled = !vaultState.initialized;
+    $("#vOpen").hidden = vaultState.initialized;
+    $("#vMigrate").hidden = !vaultState.unlocked || !vaultState.recovery_confirmed;
+  }).catch(() => ($("#vInfo").textContent = "État du coffre indisponible."));
+  $("#vConsent").onchange = async event => {
+    try { await api("/api/vault/consent", { method: "PUT", body: { consent: event.target.checked } }); toast("Consentement enregistré"); }
+    catch (error) { toast(error.message, 5000); event.target.checked = !event.target.checked; }
+  };
+  $("#vOpen").onclick = () => window.JobRadarVault?.open();
+  $("#vMigrate").onclick = () => window.JobRadarVault?.migrate();
   $("#aBackup").onclick = async e => {
     let res;
     try { res = await busy(e.currentTarget, "Création de la sauvegarde…", () => api("/api/backup", { method: "POST" })); } catch (err) {

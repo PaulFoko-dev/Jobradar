@@ -1,6 +1,7 @@
 """Exécution Playwright des adaptateurs de candidature, avec arrêt sûr avant envoi."""
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -28,6 +29,7 @@ from . import (
     db,
     login_credentials,
     notifications,
+    private_io,
     profile,
     tailoring,
 )
@@ -309,7 +311,7 @@ def _paste_resume(plan: dict, files: dict) -> dict:
         return plan
     try:
         path = Path(files["cv"])
-        text = "\n".join(line.strip() for line in profile.extract_text(path.name, path.read_bytes()).splitlines()
+        text = "\n".join(line.strip() for line in profile.extract_text(path.name, private_io.read_bytes(path)).splitlines()
                          if line.strip())
     except (OSError, ValueError):
         return plan
@@ -1001,7 +1003,7 @@ def _claim_tab(page, attempt: dict) -> None:
 
 def _last_tab_url(attempt: dict) -> str | None:
     try:
-        return json.loads((_proof_directory(attempt) / "onglet.json").read_text(encoding="utf-8")).get("url")
+        return json.loads(private_io.read_text(_proof_directory(attempt) / "onglet.json")).get("url")
     except (OSError, ValueError, db.NotFound):
         return None
 
@@ -1546,6 +1548,9 @@ def process(attempt: dict) -> None:
             "Le navigateur JobRadar est resté occupé pendant 10 min ; la candidature sera reprise plus tard."
         )
     outcome = None
+    # Documents chiffrés au repos : copies déchiffrées le temps du dépôt, dans un dossier privé supprimé ensuite.
+    copies = contextlib.ExitStack()
+    files = copies.enter_context(private_io.plain_copies(files))
     try:
         lock_dir.mkdir(parents=True, exist_ok=True)
         settings = config.browser_settings()
@@ -1580,6 +1585,11 @@ def process(attempt: dict) -> None:
         raise BrowserUnavailable(str(exc)) from exc
     finally:
         browser_lock.release()
+        copies.close()
+        try:
+            private_io.seal_tree(_proof_directory(attempt))  # captures et DOM écrits par le navigateur
+        except Exception:  # noqa: BLE001 - jamais une cause d'échec de la candidature
+            LOGGER.warning("Preuves de la candidature non scellées", exc_info=True)
     if outcome == "submitted":
         application_flow.finalize_assisted_submission(attempt["id"])
 
@@ -2254,13 +2264,13 @@ def _run_session(context, attempt: dict, provider: str, candidate: dict, files: 
             lang = page.locator("html").get_attribute("lang") or lang
             if files.get("lettre"):
                 letter_path = Path(files["lettre"])
-                letter_text = profile.extract_text(letter_path.name, letter_path.read_bytes())
+                letter_text = profile.extract_text(letter_path.name, private_io.read_bytes(letter_path))
             if attempt.get("letter_document_id"):
                 cache["letter_paragraphs"] = db.get_document(attempt["letter_document_id"])["composition"].get(
                     "paragraphs") or []
             motivation_path = _proof_directory(attempt) / "motivation.md"
             if motivation_path.exists():
-                cache["message"] = motivation_path.read_text(encoding="utf-8").split("\n\n", 1)[-1].strip()
+                cache["message"] = private_io.read_text(motivation_path).split("\n\n", 1)[-1].strip()
             plan = application_adapters.ai_plan(plan, candidate, application, letter_text, lang, cache)
             if cache.get("message") and not motivation_path.exists():
                 profile.atomic_write(motivation_path,

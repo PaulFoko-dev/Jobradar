@@ -119,6 +119,9 @@ def empty_profile() -> dict:
 
 def atomic_write(path: Path, content: bytes) -> None:
     """Écrit dans un fichier temporaire du même dossier puis le renomme : jamais de fichier à moitié écrit."""
+    from . import private_io  # import local : private_io dépend du coffre, qui écrit avec atomic_write
+
+    content = private_io.seal(path, content)  # chiffré sous profil/ et candidatures/ dès que le coffre existe
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
@@ -130,6 +133,16 @@ def atomic_write(path: Path, content: bytes) -> None:
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise
+
+
+def _read_private_bytes(path: Path) -> bytes:
+    from . import private_io
+
+    return private_io.read_bytes(path)
+
+
+def _read_private(path: Path) -> str:
+    return _read_private_bytes(path).decode("utf-8")
 
 
 def atomic_json(path: Path, data: Any) -> None:
@@ -194,7 +207,7 @@ def load_profile() -> dict:
     if not path.exists():
         return empty_profile()
     try:
-        return _normalise_profile(json.loads(path.read_text(encoding="utf-8")))
+        return _normalise_profile(json.loads(_read_private(path)))
     except (OSError, json.JSONDecodeError) as exc:
         raise ProfileError("Le profil local est illisible.") from exc
 
@@ -246,35 +259,64 @@ def update_profile(changes: dict) -> dict:
             changes["identity"] = current["identity"] | changes["identity"]
         if isinstance(changes.get("preferences"), dict):
             changes["preferences"] = current["preferences"] | changes["preferences"]
+        if isinstance(changes.get("standard_answers"), dict):
+            from . import answer_memory
+
+            changes["standard_answers"] = answer_memory.merge(current["standard_answers"],
+                                                              changes["standard_answers"])
         merged = current | changes
         _mark_user_items(merged, _now())
         return save_profile(merged)
 
 
 def remember_form_answers(answers: list[dict]) -> dict:
-    """Mémorise localement les réponses explicitement fournies dans un formulaire."""
+    """Mémorise les réponses fournies dans un formulaire : sous leur concept (disponibilité, salaire…) s'il est
+    reconnu, versionnées et datées (une réponse différente remplace l'ancienne, qui rejoint l'historique)."""
+    from . import answer_memory
+    from .application_adapters import _concept_of
+
     with LOCK:
         current = load_profile()
         standard = deepcopy(current["standard_answers"])
-        existing = {fold(item.get("question")) for item in standard.values() if isinstance(item, dict)}
+        by_question = {fold(item.get("question")): key for key, item in standard.items() if isinstance(item, dict)}
+        incoming = {}
         for item in answers:
             question = " ".join(str(item.get("label") or "").split())[:300]
-            if not question or item.get("kind") == "file" or item.get("sensitive") is True or fold(question) in existing:
+            if not question or item.get("kind") == "file" or item.get("sensitive") is True:
                 continue
             raw_value = item.get("value")
             answer = ("Oui" if raw_value else "Non") if isinstance(raw_value, bool) else str(raw_value).strip()
             if not answer:
                 continue
             digest = hashlib.sha256(fold(question).encode()).hexdigest()[:8]
-            key = f"form_{_slug(question)[:48] or 'reponse'}_{digest}"
-            standard[key] = {
-                "question": question, "answer": answer, "source": "formulaire_utilisateur",
-                "sensitive": False,
-            }
-            existing.add(fold(question))
+            key = (by_question.get(fold(question)) or _concept_of(question)
+                   or f"form_{_slug(question)[:48] or 'reponse'}_{digest}")
+            previous = standard.get(key) if isinstance(standard.get(key), dict) else {}
+            incoming[key] = {"question": previous.get("question") or question, "answer": answer,
+                             "source": "formulaire_utilisateur", "sensitive": False}
+        if not incoming:
+            return current
+        merged = answer_memory.merge(standard, incoming)
+        for key, item in merged.items():
+            if item.get("answer") == standard.get(key, {}).get("answer") and answer_memory.is_expired(item):
+                merged[key] = answer_memory.stamp(key, item)  # répondue de nouveau : reconfirmée
+        standard.update(merged)
         if standard == current["standard_answers"]:
             return current
         current["standard_answers"] = standard
+        return save_profile(current)
+
+
+def confirm_answer(key: str) -> dict:
+    """Confirme qu'une réponse type est toujours valable (repart pour une période complète)."""
+    from . import answer_memory
+
+    with LOCK:
+        current = load_profile()
+        try:
+            current["standard_answers"] = answer_memory.confirm(deepcopy(current["standard_answers"]), key)
+        except KeyError as exc:
+            raise ProfileError("Réponse type introuvable.") from exc
         return save_profile(current)
 
 
@@ -286,7 +328,7 @@ def list_versions() -> list[dict]:
     if versions_dir().is_dir():
         for path in versions_dir().glob("profil-v*.json"):
             try:
-                item = json.loads(path.read_text(encoding="utf-8"))
+                item = json.loads(_read_private(path))
                 versions.append({"version": item["version"], "updated_at": item["updated_at"], "current": False})
             except (OSError, ValueError, KeyError, TypeError):
                 continue
@@ -304,7 +346,7 @@ def load_version(version: int) -> dict:
     if not path.is_file() or path.is_symlink():
         raise FileNotFoundError("Version de profil introuvable.")
     try:
-        return _normalise_profile(json.loads(path.read_text(encoding="utf-8")))
+        return _normalise_profile(json.loads(_read_private(path)))
     except (OSError, json.JSONDecodeError) as exc:
         raise ProfileError("Cette version du profil est illisible.") from exc
 
@@ -637,7 +679,7 @@ def used_ids(data: dict) -> set[str]:
     if versions_dir().is_dir():
         for path in versions_dir().glob("profil-v*.json"):
             try:
-                used |= collect(json.loads(path.read_text(encoding="utf-8")))
+                used |= collect(json.loads(_read_private(path)))
             except (OSError, ValueError, TypeError, AttributeError):
                 continue
     return used
@@ -878,7 +920,7 @@ def source_path(source_id: str) -> Path:
 
 def source_text(source: dict) -> str:
     """Texte d'un document de base, coordonnées masquées (pour l'assistant)."""
-    text = extract_text(source["filename"], source_path(source["id"]).read_bytes())
+    text = extract_text(source["filename"], _read_private_bytes(source_path(source["id"])))
     return mask_identity(text, load_profile()["identity"])
 
 

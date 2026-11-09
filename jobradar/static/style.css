@@ -871,3 +871,13 @@ table.apps .k-flags { margin-top: 4px; }
 .aa-log-text { max-height: 45vh; overflow: auto; padding: 12px; border-radius: 8px; background: var(--surface-2);
   white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 @media (max-width: 700px) { .aa-log-events li { grid-template-columns: 1fr; } }
+/* Coffre chiffré : activation et déverrouillage */
+.vault-steps { display: flex; gap: 8px; list-style: none; padding: 0; margin: 12px 0 16px; flex-wrap: wrap; }
+.vault-steps li { padding: 4px 10px; border-radius: 999px; font-size: .85em; background: var(--surface-2, var(--bg)); color: var(--muted); }
+.vault-steps li.current { background: var(--accent); color: #fff; font-weight: 600; }
+.vault-steps li.done { color: var(--good); }
+.vault-points { padding-left: 18px; display: grid; gap: 6px; }
+.vault-key { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 1.05em; letter-spacing: .04em;
+  padding: 14px; border: 2px dashed var(--accent); border-radius: 10px; word-break: break-all; user-select: all; text-align: center; }
+.vault-actions { display: flex; gap: 8px; margin: 8px 0 14px; }
+.vault-check { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }

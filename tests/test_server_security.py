@@ -34,3 +34,13 @@ def test_vault_routes_never_return_keys(client, env_key) -> None:
     assert recovery not in str(status) and "wrapped" not in str(status)
     assert client.post("/api/vault/unlock", json={"recovery_key": "AAAA-" * 12}).status_code == 400
     assert client.post("/api/vault/unlock", json={"recovery_key": recovery}).json()["unlocked"] is True
+
+
+def test_full_migration_requires_a_confirmed_recovery_key(client, env_key) -> None:
+    client.post("/api/applications", json={"title": "Stage", "company": "Acme", "url": "https://example.com/o"})
+    client.post("/api/vault/init")
+    assert client.post("/api/vault/migrate").status_code == 409
+    client.post("/api/vault/confirm-recovery")
+    done = client.post("/api/vault/migrate").json()
+    assert done["unlocked"] and done["values"] >= 1
+    assert client.post("/api/vault/migrate").json()["values"] == 0

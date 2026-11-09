@@ -10,6 +10,7 @@ reste réservé au chemin protégé du moteur (relecture du DOM, erreurs de vali
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 import time
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from . import ai, config, profile
+from . import ai, config, private_io, profile
 from .application_adapters import (
     CONSENT_WORDS,
     NEWSLETTER_WORDS,
@@ -281,7 +282,7 @@ def _pdf_links(path: Path) -> str:
         return ""
     try:
         uris = []
-        for page in PdfReader(path).pages:
+        for page in PdfReader(io.BytesIO(private_io.read_bytes(path))).pages:
             for annotation in page.get("/Annots") or []:
                 action = annotation.get_object().get("/A")
                 uri = action.get_object().get("/URI") if action else None
@@ -325,7 +326,7 @@ def document_facts(files: dict[str, str], cache_dir: Path | None = None,
         if files.get(kind):
             path = Path(files[kind])
             try:
-                texts.append(profile.extract_text(path.name, path.read_bytes()) + _pdf_links(path))
+                texts.append(profile.extract_text(path.name, private_io.read_bytes(path)) + _pdf_links(path))
             except (OSError, profile.ProfileError):
                 continue
     text = "\n\n".join(texts)[:20_000]
@@ -334,7 +335,7 @@ def document_facts(files: dict[str, str], cache_dir: Path | None = None,
     digest = hashlib.sha1((FACTS_VERSION + text).encode()).hexdigest()
     cache = cache_dir / "faits-documents.json" if cache_dir else None
     try:
-        cached = json.loads(cache.read_text(encoding="utf-8")) if cache else {}
+        cached = json.loads(private_io.read_text(cache)) if cache else {}
         if cached.get("hash") == digest:
             return cached["facts"]
     except (OSError, ValueError, KeyError):
@@ -358,7 +359,8 @@ def document_facts(files: dict[str, str], cache_dir: Path | None = None,
     if cache:
         try:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps({"hash": digest, "facts": facts}, ensure_ascii=False, indent=2), encoding="utf-8")
+            profile.atomic_write(cache, json.dumps({"hash": digest, "facts": facts}, ensure_ascii=False,
+                                                   indent=2).encode())
         except OSError:
             pass
     return facts
@@ -624,7 +626,7 @@ def save_dom(page, directory: Path, label: str, private_values: list[str], **met
         profile.atomic_write(path, html.encode())
         index_path = directory / DOM_INDEX
         try:
-            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index = json.loads(private_io.read_text(index_path))
         except (OSError, ValueError):
             index = []
         index.append({"file": path.name, "url": redaction.strip_url(page.url),
@@ -648,7 +650,7 @@ class Journal:
         self._append(f"\n## Tentative {attempt_id} — {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     def _append(self, text: str) -> None:
-        current = self.path.read_text(encoding="utf-8") if self.path.exists() else ""
+        current = private_io.read_text(self.path) if self.path.exists() else ""
         profile.atomic_write(self.path, (current + text).encode())
 
     def note(self, text: str) -> None:
@@ -658,7 +660,7 @@ class Journal:
         """Attente d'une action de l'utilisateur, affichée dans le panneau (``None`` : attente terminée)."""
         path = self.directory / "supervision.json"
         try:
-            state = json.loads(path.read_text(encoding="utf-8"))
+            state = json.loads(private_io.read_text(path))
         except (OSError, ValueError):
             state = {}
         if state.get("attempt_id") != self.attempt_id:

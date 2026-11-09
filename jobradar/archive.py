@@ -34,7 +34,7 @@ from types import ModuleType
 from typing import Any
 from urllib.parse import quote
 
-from . import config, db, workflow
+from . import config, db, private_io, workflow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -363,7 +363,7 @@ def _archive_dirs(root: Path) -> list[Path]:
 
 def read_document(directory: Path) -> dict:
     try:
-        document = json.loads((directory / "candidature.json").read_text(encoding="utf-8"))
+        document = json.loads(private_io.read_text(directory / "candidature.json"))
     except (OSError, ValueError) as exc:
         raise ValueError(f"candidature.json illisible dans {directory.name}.") from exc
     if not isinstance(document, dict) or not isinstance(document.get("application"), dict):
@@ -562,7 +562,7 @@ def _previous_rank(row: dict) -> int:
 
 def _shows_wall(archive_dir: str) -> bool:
     try:
-        pdf = (_child(archive_root(), archive_dir) / "offre" / "offre.pdf").read_bytes()
+        pdf = private_io.read_bytes(_child(archive_root(), archive_dir) / "offre" / "offre.pdf")
         return _capture_module().pdf_shows_wall(pdf)
     except (OSError, ImportError, AttributeError, UnsafePath):
         return False

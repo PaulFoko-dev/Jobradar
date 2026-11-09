@@ -32,7 +32,9 @@ from . import (
     notifications,
     pipeline,
     preparation,
+    private_io,
     profile,
+    profile_coach,
     tailoring,
     vault,
     workflow,
@@ -89,6 +91,14 @@ async def local_requests_only(request: Request, call_next):
     return await call_next(request)
 
 
+def _private_file(path: Path, media_type: str, *, inline: bool) -> Response:
+    """Fichier privé (éventuellement chiffré au repos) servi déchiffré, sous son vrai nom."""
+    disposition = "inline" if inline else "attachment"
+    return Response(private_io.read_bytes(path), media_type=media_type, headers={
+        "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(path.name)}",
+        "X-Content-Type-Options": "nosniff"})
+
+
 class ConsentIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     consent: StrictBool
@@ -97,6 +107,45 @@ class ConsentIn(BaseModel):
 class RecoveryIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     recovery_key: str = Field(min_length=20, max_length=200)
+
+
+@app.get("/api/profile/coach")
+def profile_coach_review():
+    return profile_coach.review(profile.load_profile())
+
+
+@app.post("/api/profile/coach/{item_id}/enrich")
+def profile_coach_enrich(item_id: str, body: dict):
+    try:
+        return profile_coach.enrich(item_id, body.get("answers") if isinstance(body, dict) else None)
+    except (profile_coach.CoachError, tailoring.CompositionError, profile.ProfileError) as exc:
+        raise HTTPException(400, str(exc))
+    except ai.AIError as exc:
+        raise HTTPException(503, str(exc))
+
+
+@app.post("/api/profile/coach/merge")
+def profile_coach_merge(body: dict):
+    try:
+        return profile_coach.merge(str(body.get("keep") or ""), str(body.get("drop") or ""))
+    except (profile_coach.CoachError, profile.ProfileError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/profile/coach/link-skills")
+def profile_coach_link_skills():
+    with profile.LOCK:
+        data = profile.load_profile()
+        linked = profile_coach.link_skills(data)
+        return profile.save_profile(data) | {"linked": linked}
+
+
+@app.post("/api/profile/answers/{key}/confirm")
+def confirm_profile_answer(key: str):
+    try:
+        return profile.confirm_answer(key)
+    except profile.ProfileError as exc:
+        raise HTTPException(404, str(exc))
 
 
 @app.get("/api/vault")
@@ -124,6 +173,18 @@ def vault_unlock(body: RecoveryIn):
     except vault.VaultError as exc:
         raise HTTPException(400, str(exc))
     return vault.status()
+
+
+@app.post("/api/vault/migrate")
+def vault_migrate():
+    """Chiffre tout l'existant (colonnes privées, profil, candidatures) ; reprenable, sans effet s'il est fait."""
+    if not vault.status()["unlocked"]:
+        raise HTTPException(409, "Coffre fermé : déverrouille-le avant de chiffrer tes données.")
+    if not vault.status()["recovery_confirmed"]:
+        raise HTTPException(409, "Confirme d'abord avoir sauvegardé ta clé de récupération.")
+    values = db.encrypt_existing()
+    files = private_io.seal_tree()
+    return {"values": values, "files": files} | vault.status()
 
 
 @app.post("/api/vault/lock")
@@ -966,9 +1027,7 @@ def sent_document(document_id: int):
 @app.get("/api/documents/{document_id}/file")
 def get_document_file(document_id: int, name: str):
     path = tailoring.document_file(document_id, name)
-    return FileResponse(path, media_type=archive.mime_type(path), filename=path.name,
-                        content_disposition_type="inline" if path.suffix.lower() == ".pdf" else "attachment",
-                        headers={"X-Content-Type-Options": "nosniff"})
+    return _private_file(path, archive.mime_type(path), inline=path.suffix.lower() == ".pdf")
 
 
 @app.get("/api/templates")
@@ -1044,9 +1103,7 @@ def application_archive_file(aid: int, path: str):
     journal = target.name == "journal.md" and target.parent.name == "envoi"
     inline = journal or target.suffix.lower() in {".pdf", ".png", ".jpg", ".jpeg"}  # aperçu dans l'onglet « Offre »
     media_type = "text/plain; charset=utf-8" if journal else archive.mime_type(target)
-    return FileResponse(target, media_type=media_type, filename=target.name,
-                        content_disposition_type="inline" if inline else "attachment",
-                        headers={"X-Content-Type-Options": "nosniff"})
+    return _private_file(target, media_type, inline=inline)
 
 
 @app.get("/api/applications/{aid}/offer-snapshot")

@@ -80,6 +80,14 @@ def main():
         # Un seul e-mail récapitulatif pour toutes les recherches de l'exécution.
         pipeline.log_email(notifications.deliver_email_digest(), print)
         maintain_archives()
+        try:
+            from . import private_io
+
+            sealed = private_io.seal_tree()  # captures et PDF écrits directement par le navigateur
+            if sealed:
+                print(f"Coffre : {sealed} fichier(s) chiffré(s)")
+        except Exception as exc:  # coffre fermé : rien n'est perdu, le balayage reprendra
+            print(f"Coffre : balayage impossible ({exc})")
         # Sans serveur, les préparations (dont l'auto-candidature) sont faites ici ; les envois assistés
         # qu'elles placent dans la file partiront au prochain démarrage du serveur.
         prepared = preparation.run_pending()
